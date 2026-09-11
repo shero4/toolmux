@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 func TestDiscoverAndCall(t *testing.T) {

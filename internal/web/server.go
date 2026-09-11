@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-mcp/sentinel/internal/checker"
-	"github.com/sentinel-mcp/sentinel/internal/discovery"
-	"github.com/sentinel-mcp/sentinel/internal/oauth"
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/checker"
+	"github.com/shero4/toolmux/internal/discovery"
+	"github.com/shero4/toolmux/internal/oauth"
+	"github.com/shero4/toolmux/internal/store"
 )
 
-//go:embed templates/*.html static/bundle.css
+//go:embed templates/*.html static/bundle.css static/favicon.svg
 var assets embed.FS
 
 type Server struct {
@@ -204,10 +204,10 @@ func (s *Server) setupGuide(agent store.Agent, token string) setupGuide {
 	endpoint := s.baseURL + "/mcp"
 	switch agent.Runtime {
 	case "hermes":
-		config := "mcp_servers:\n  sentinel:\n    url: \"" + endpoint + "\"\n    headers:\n      Authorization: \"Bearer " + token + "\"\n    enabled: true\n    supports_parallel_tool_calls: true"
+		config := "mcp_servers:\n  toolmux:\n    url: \"" + endpoint + "\"\n    headers:\n      Authorization: \"Bearer " + token + "\"\n    enabled: true\n    supports_parallel_tool_calls: true"
 		return setupGuide{Title: "Connect Hermes", Destination: agent.ConfigPath, Config: config, Note: "Merge this server into mcp_servers, then restart that Hermes profile."}
 	case "openclaw":
-		serverName := "sentinel-" + agent.Slug
+		serverName := "toolmux-" + agent.Slug
 		payload, _ := json.Marshal(map[string]any{"url": endpoint, "transport": "streamable-http", "headers": map[string]string{"Authorization": "Bearer " + token}})
 		command := "openclaw mcp set " + serverName + " '" + string(payload) + "'"
 		return setupGuide{Title: "Connect OpenClaw", Destination: agent.ConfigPath, Config: command, Note: "Run this in the detected environment, then run openclaw mcp probe " + serverName + "."}
@@ -424,7 +424,7 @@ func (s *Server) render(w http.ResponseWriter, data pageData) {
 }
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	s.log.Error("request failed", "error", err)
-	http.Error(w, "Sentinel is temporarily unavailable.", http.StatusInternalServerError)
+	http.Error(w, "Toolmux is temporarily unavailable.", http.StatusInternalServerError)
 }
 func (s *Server) redirectError(w http.ResponseWriter, r *http.Request, path, message string) {
 	http.Redirect(w, r, path+map[bool]string{true: "&", false: "?"}[strings.Contains(path, "?")]+"error="+url.QueryEscape(message), http.StatusSeeOther)

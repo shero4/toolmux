@@ -1,9 +1,9 @@
 services:
-  sentinel:
+  toolmux:
     environment:
-      SENTINEL_DISCOVERY_ROOTS: /host-home
+      TOOLMUX_DISCOVERY_ROOTS: /host-home
     volumes:
       - type: bind
-        source: ${SENTINEL_HOST_HOME:?set SENTINEL_HOST_HOME}
+        source: ${TOOLMUX_HOST_HOME:-${SENTINEL_HOST_HOME:?set TOOLMUX_HOST_HOME}}
         target: /host-home
         read_only: true

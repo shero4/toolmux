@@ -4,13 +4,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Minimal tool access control for agents">
-  <title>{{.Title}} · Sentinel</title>
+  <meta name="description" content="Toolmux — one clean tool endpoint for every agent">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#181b20" media="(prefers-color-scheme: dark)">
+  <title>{{.Title}} · Toolmux</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/bundle.css">
 </head>
 <body>
   <header class="topbar navbar bg-base-100">
-    <a class="brand btn btn-ghost" href="/">Sentinel</a>
+    <a class="brand btn btn-ghost gap-2" href="/" aria-label="Toolmux overview"><span class="text-2xl leading-none" aria-hidden="true">🪼</span><span>Toolmux</span></a>
     <nav aria-label="Primary">
       <a class="btn btn-ghost btn-sm" {{if eq .Page "dashboard"}}aria-current="page"{{end}} href="/">Overview</a>
       <a class="btn btn-ghost btn-sm" {{if eq .Page "connections"}}aria-current="page"{{end}} href="/connections">Connections</a>
@@ -109,7 +112,7 @@
 <div class="page-heading"><div><p class="eyebrow">Machine identities</p><h1>Agents</h1><p>Every runtime gets an independent endpoint identity and its own tool access.</p></div><a class="btn btn-primary" href="/agents?discover=1">Discover agents</a></div>
 {{if .Token}}<section class="token-panel card"><p>New agent token · shown once</p><code>{{.Token}}</code></section>{{end}}
 {{if .Setup.Title}}<section class="setup-panel card border border-base-300 bg-base-100"><div><p class="eyebrow">Next step</p><h2>{{.Setup.Title}}</h2>{{if .Setup.Destination}}<p>Detected configuration: <code>{{.Setup.Destination}}</code></p>{{end}}</div><pre><code>{{.Setup.Config}}</code></pre><p>{{.Setup.Note}}</p></section>{{end}}
-{{if .Scanned}}<section class="discovery-panel"><div class="section-heading"><div><h2>Found on this system</h2><p>Sentinel only reads configuration locations. Nothing is changed until you import an identity.</p></div><a class="btn btn-ghost btn-sm" href="/agents?discover=1">Scan again</a></div>{{if .Discovered}}<div class="list card border border-base-300 bg-base-100">{{range .Discovered}}<article class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">{{.Runtime}}</span></div><p>{{.Environment}} · {{.ConfigPath}}</p></div><form method="post" action="/agents/import"><input type="hidden" name="candidate_id" value="{{.ID}}"><button class="btn btn-primary btn-sm" type="submit">Import</button></form></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No new agents found</strong><p>Already imported agents are hidden. For a container, mount the host home read-only and set <code>SENTINEL_DISCOVERY_ROOTS</code>.</p></div>{{end}}</section>{{end}}
+{{if .Scanned}}<section class="discovery-panel"><div class="section-heading"><div><h2>Found on this system</h2><p>Toolmux only reads configuration locations. Nothing is changed until you import an identity.</p></div><a class="btn btn-ghost btn-sm" href="/agents?discover=1">Scan again</a></div>{{if .Discovered}}<div class="list card border border-base-300 bg-base-100">{{range .Discovered}}<article class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">{{.Runtime}}</span></div><p>{{.Environment}} · {{.ConfigPath}}</p></div><form method="post" action="/agents/import"><input type="hidden" name="candidate_id" value="{{.ID}}"><button class="btn btn-primary btn-sm" type="submit">Import</button></form></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No new agents found</strong><p>Already imported agents are hidden. For a container, mount the host home read-only and set <code>TOOLMUX_DISCOVERY_ROOTS</code>.</p></div>{{end}}</section>{{end}}
 <div class="split form-split">
   <section><div class="section-heading"><h2>Configured</h2></div>{{if .Agents}}<div class="list card border border-base-300 bg-base-100">{{range .Agents}}<a class="row linked" href="/agents/{{.ID}}"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong>{{if .Runtime}}<span class="kind badge badge-ghost badge-sm">{{.Runtime}}</span>{{end}}<span class="status badge badge-outline badge-sm status-{{.Status}}">{{.Status}}</span></div><p>{{.Slug}}{{if .Environment}} · {{.Environment}}{{end}} · {{.ToolCount}} granted tools · last used {{date .LastUsedAt}}</p></div><span aria-hidden="true">→</span></a>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No agents yet</strong><p>Discover installed agents or create an identity manually.</p></div>{{end}}</section>
   <section class="form-panel card border border-base-300 bg-base-100"><h2>Create manually</h2><form method="post" action="/agents"><label>Agent name<input class="input input-bordered" name="name" required placeholder="Automation agent"></label><label>Agent slug<input class="input input-bordered" name="slug" pattern="[a-z0-9][a-z0-9-]*" placeholder="automation-agent"></label><button class="btn btn-primary" type="submit">Create agent</button></form></section>

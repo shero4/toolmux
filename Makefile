@@ -9,4 +9,4 @@ test:
 
 run:
 	npm run build:css
-	go run ./cmd/sentinel
+	go run ./cmd/toolmux

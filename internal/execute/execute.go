@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-mcp/sentinel/internal/mcp"
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/mcp"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 var placeholder = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)\}`)

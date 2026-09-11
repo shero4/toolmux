@@ -1,5 +1,5 @@
 .env
 .git
-sentinel
+/toolmux
 *.exe
 node_modules

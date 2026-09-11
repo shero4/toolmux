@@ -1,11 +1,11 @@
-# Sentinel
+# 🪼 Toolmux
 
-Sentinel is a small, self-hosted tool access broker for agents. Connect an MCP
+Toolmux is a small, self-hosted tool access broker for agents. Connect an MCP
 server, HTTP API, or installed CLI once, issue each agent its own token, and
 explicitly grant the tools that agent may discover and call. Every capability is
 presented to agents through one MCP endpoint.
 
-Sentinel deliberately does not route models, run agents, manage prompts, act as
+Toolmux deliberately does not route models, run agents, manage prompts, act as
 an AI gateway, or sandbox its host. The machine or container is trusted. The
 security boundary is the agent-facing MCP endpoint and its per-agent grants.
 
@@ -35,7 +35,7 @@ Build the image, then generate the required encryption key:
 
 ```sh
 docker compose build
-docker compose run --rm --no-deps sentinel keygen
+docker compose run --rm --no-deps toolmux keygen
 ```
 
 Copy `.env.example` to `.env`, replace the key, then run:
@@ -44,29 +44,29 @@ Copy `.env.example` to `.env`, replace the key, then run:
 docker compose up --build
 ```
 
-Open `http://localhost:8080`. Sentinel assumes its host and network are trusted,
+Open `http://localhost:8080`. Toolmux assumes its host and network are trusted,
 so the administration interface has no separate login. When exposing it from a
 remote machine, keep it on a private network or place it behind your existing
 reverse proxy authentication.
 
 ### Discover installed agents
 
-When Sentinel runs directly on a computer, the **Discover agents** button scans
+When Toolmux runs directly on a computer, the **Discover agents** button scans
 the current user's standard Hermes and OpenClaw configuration locations. On
 Windows it also inspects WSL distributions. Detection is read-only and ignores
 directories that do not contain an agent configuration.
 
 A container cannot see host files unless they are mounted. Set
-`SENTINEL_HOST_HOME` in `.env`, then include the small discovery override:
+`TOOLMUX_HOST_HOME` in `.env`, then include the small discovery override:
 
 ```sh
 docker compose -f compose.yaml -f compose.discovery.yaml up --build
 ```
 
-The host home is mounted read-only. Sentinel looks for Hermes' default profile
+The host home is mounted read-only. Toolmux looks for Hermes' default profile
 and named profiles below `.hermes`, plus OpenClaw agents below `.openclaw` and
 named `.openclaw-*` state directories. You can instead set
-`SENTINEL_DISCOVERY_ROOTS` to an OS path-list when running the binary directly.
+`TOOLMUX_DISCOVERY_ROOTS` to an OS path-list when running the binary directly.
 
 ## Connect an agent
 
@@ -78,11 +78,11 @@ URL: http://localhost:8080/mcp
 Authorization: Bearer <agent token>
 ```
 
-Tokens are displayed once. Sentinel stores only their SHA-256 hashes.
+Tokens are displayed once. Toolmux stores only their SHA-256 hashes.
 
 Imported Hermes agents receive a ready-to-merge `mcp_servers` entry. Imported
 OpenClaw agents receive an exact `openclaw mcp set` command and a probe command.
-Sentinel does not silently rewrite either tool's configuration.
+Toolmux does not silently rewrite either tool's configuration.
 
 For an OAuth connection, register this redirect URL with the provider:
 
@@ -90,8 +90,8 @@ For an OAuth connection, register this redirect URL with the provider:
 http://localhost:8080/oauth/callback
 ```
 
-Use the public `SENTINEL_BASE_URL` instead of localhost when Sentinel is behind
-TLS. Sentinel uses Authorization Code with PKCE and refreshes access tokens one
+Use the public `TOOLMUX_BASE_URL` instead of localhost when Toolmux is behind
+TLS. Toolmux uses Authorization Code with PKCE and refreshes access tokens one
 minute before expiry. Providers that require dynamic client registration are not
 yet supported; supply a client ID and, when required, a client secret.
 
@@ -107,7 +107,7 @@ be a bearer token, OAuth 2.0 token, or any named credential header.
 
 Create an `Installed command` connection, then define a tool with an executable
 and a JSON array of arguments. Arguments may reference top-level inputs as
-`${input_name}`. Sentinel calls the executable directly, inherits the host
+`${input_name}`. Toolmux calls the executable directly, inherits the host
 environment so existing CLI authorization keeps working, and supports an
 optional working directory. The stock image is intentionally minimal; extend it
 with the CLI binaries you use, or run the binary directly on a configured host.

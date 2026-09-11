@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/sentinel-mcp/sentinel/internal/secretbox"
+	"github.com/shero4/toolmux/internal/secretbox"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -189,7 +189,7 @@ func (s *Store) createAgent(ctx context.Context, name, slug, sourceKey, runtime,
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return Agent{}, "", err
 	}
-	token := "snt_" + base64.RawURLEncoding.EncodeToString(tokenBytes)
+	token := "tmx_" + base64.RawURLEncoding.EncodeToString(tokenBytes)
 	hash := sha256.Sum256([]byte(token))
 	prefix := token[:12]
 	tx, err := s.pool.Begin(ctx)

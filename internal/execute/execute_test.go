@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 func TestRenderStringRequiresInputs(t *testing.T) {

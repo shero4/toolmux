@@ -1,14 +1,14 @@
-# Sentinel design
+# Toolmux design
 
 ## Boundary
 
-Sentinel is the authorization boundary between an MCP client and tools backed by
+Toolmux is the authorization boundary between an MCP client and tools backed by
 remote MCP servers, HTTP APIs, or installed commands. An agent authenticates to
-Sentinel. Sentinel authorizes the requested tool, adds the upstream credential,
+Toolmux. Toolmux authorizes the requested tool, adds the upstream credential,
 executes the typed adapter, and records the outcome.
 
 It is not an agent runtime, identity provider, secret manager, model gateway, or
-host sandbox. The operator trusts the Sentinel host and everything deliberately
+host sandbox. The operator trusts the Toolmux host and everything deliberately
 installed or configured on it.
 
 ## Request path
@@ -55,7 +55,7 @@ process can also run fixed, read-only probes inside installed WSL distributions.
 
 Candidates are transient and identified by a stable hash of runtime, profile,
 environment, and configuration path. Importing creates a normal agent and an
-`agent_installations` row in one database transaction. Sentinel never stores or
+`agent_installations` row in one database transaction. Toolmux never stores or
 copies the runtime's own secrets and does not rewrite external configuration.
 Containers require an explicit read-only host mount because host paths do not
 otherwise exist inside the container boundary.

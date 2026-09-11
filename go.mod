@@ -1,4 +1,4 @@
-module github.com/sentinel-mcp/sentinel
+module github.com/shero4/toolmux
 
 go 1.24
 

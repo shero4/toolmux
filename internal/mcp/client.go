@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 var ErrUnauthorized = errors.New("upstream rejected the credential")
@@ -106,7 +106,7 @@ func (c *Client) connect(ctx context.Context, connection store.Connection, crede
 	params := map[string]any{
 		"protocolVersion": "2025-11-25",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]string{"name": "sentinel", "version": "0.1.0"},
+		"clientInfo":      map[string]string{"name": "toolmux", "version": "0.1.0"},
 	}
 	var initialized struct {
 		ProtocolVersion string `json:"protocolVersion"`

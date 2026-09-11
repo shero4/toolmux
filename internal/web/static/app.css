@@ -7,5 +7,5 @@
   logs: false;
 }
 
-/* Sentinel keeps its compact layout layer in styles.css. daisyUI owns the
+/* Toolmux keeps its compact layout layer in styles.css. daisyUI owns the
    reusable controls and surfaces used by the server-rendered templates. */

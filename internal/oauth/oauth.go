@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 var ErrReauthorization = errors.New("OAuth reauthorization required")

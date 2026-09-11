@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/sentinel-mcp/sentinel/internal/execute"
-	"github.com/sentinel-mcp/sentinel/internal/mcp"
-	"github.com/sentinel-mcp/sentinel/internal/oauth"
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/execute"
+	"github.com/shero4/toolmux/internal/mcp"
+	"github.com/shero4/toolmux/internal/oauth"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 type Checker struct {

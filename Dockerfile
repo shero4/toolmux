@@ -13,10 +13,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=ui /src/internal/web/static/bundle.css ./internal/web/static/bundle.css
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sentinel ./cmd/sentinel
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/toolmux ./cmd/toolmux
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/sentinel /sentinel
+COPY --from=build /out/toolmux /toolmux
 USER nonroot:nonroot
 EXPOSE 8080
-ENTRYPOINT ["/sentinel"]
+ENTRYPOINT ["/toolmux"]

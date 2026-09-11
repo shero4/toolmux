@@ -13,7 +13,7 @@
 coverage.*
 *.coverprofile
 profile.cov
-sentinel
+/toolmux
 
 # Dependency directories
 node_modules/

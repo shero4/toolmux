@@ -1,5 +1,5 @@
 {
-  "name": "sentinel-ui",
+  "name": "toolmux-ui",
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i internal/web/static/app.css -o internal/web/static/bundle.css --minify"

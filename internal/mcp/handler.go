@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-mcp/sentinel/internal/store"
+	"github.com/shero4/toolmux/internal/store"
 )
 
 type Handler struct {
@@ -77,7 +77,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("MCP-Protocol-Version", "2025-11-25")
 	switch request.Method {
 	case "initialize":
-		h.writeResult(w, request.ID, map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]string{"name": "sentinel", "version": "0.1.0"}})
+		h.writeResult(w, request.ID, map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]string{"name": "toolmux", "version": "0.1.0"}})
 	case "notifications/initialized":
 		w.WriteHeader(http.StatusAccepted)
 	case "ping":
@@ -160,7 +160,7 @@ func (h *Handler) callTool(w http.ResponseWriter, ctx context.Context, id, raw j
 }
 
 func (h *Handler) unauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="sentinel"`)
+	w.Header().Set("WWW-Authenticate", `Bearer realm="toolmux"`)
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 func (h *Handler) writeResult(w http.ResponseWriter, id json.RawMessage, result any) {
