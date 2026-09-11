@@ -27,3 +27,15 @@ func TestPageSliceUsesClampedPage(t *testing.T) {
 		t.Fatalf("pageSlice=%v", got)
 	}
 }
+
+func TestDisplayLabels(t *testing.T) {
+	if got := statusLabel("reauthorization_required"); got != "Needs authorization" {
+		t.Fatalf("statusLabel=%q", got)
+	}
+	if got := kindLabel("mcp_http"); got != "Remote MCP" {
+		t.Fatalf("kindLabel=%q", got)
+	}
+	if got := runtimeLabel("openclaw"); got != "OpenClaw" {
+		t.Fatalf("runtimeLabel=%q", got)
+	}
+}

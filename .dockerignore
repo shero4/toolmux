@@ -3,3 +3,4 @@
 /toolmux
 *.exe
 node_modules
+/tmp/

@@ -22,7 +22,7 @@ import (
 	"github.com/shero4/toolmux/internal/store"
 )
 
-//go:embed templates/*.html static/bundle.css static/favicon.svg
+//go:embed templates/*.html static/app.js static/bundle.css static/favicon.svg
 var assets embed.FS
 
 type Server struct {
@@ -74,7 +74,7 @@ func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, disco
 			return "Never"
 		}
 		return value.Local().Format("Jan 2, 15:04")
-	}, "time": func(value time.Time) string { return value.Local().Format("Jan 2, 15:04:05") }, "status": func(value string) string { return strings.ReplaceAll(value, "_", " ") }, "short": func(value string) string {
+	}, "time": func(value time.Time) string { return value.Local().Format("Jan 2, 15:04:05") }, "status": statusLabel, "kind": kindLabel, "runtime": runtimeLabel, "short": func(value string) string {
 		const limit = 220
 		value = strings.TrimSpace(value)
 		if len(value) <= limit {
@@ -87,6 +87,57 @@ func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, disco
 		return nil, err
 	}
 	return &Server{store: store, checker: check, oauth: oauth, discovery: discoveryScanner, importer: hermesImporter, baseURL: strings.TrimRight(baseURL, "/"), log: log, templates: templates}, nil
+}
+
+func statusLabel(value string) string {
+	switch value {
+	case "reauthorization_required":
+		return "Needs authorization"
+	case "active":
+		return "Active"
+	case "connected":
+		return "Connected"
+	case "checking":
+		return "Checking"
+	case "degraded":
+		return "Degraded"
+	case "unreachable":
+		return "Unreachable"
+	case "disabled":
+		return "Disabled"
+	default:
+		return strings.ReplaceAll(value, "_", " ")
+	}
+}
+
+func kindLabel(value string) string {
+	switch value {
+	case "mcp_http":
+		return "Remote MCP"
+	case "mcp_stdio":
+		return "Local MCP"
+	case "http_api":
+		return "HTTP API"
+	case "mcp":
+		return "MCP"
+	case "http":
+		return "HTTP"
+	case "command":
+		return "Command"
+	default:
+		return value
+	}
+}
+
+func runtimeLabel(value string) string {
+	switch strings.ToLower(value) {
+	case "hermes":
+		return "Hermes"
+	case "openclaw":
+		return "OpenClaw"
+	default:
+		return value
+	}
 }
 
 func (s *Server) Handler(mcpHandler http.Handler) http.Handler {
