@@ -79,6 +79,70 @@
 .credential-update input {
   min-width: 0;
 }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(130px, .7fr) minmax(180px, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.filter-bar.compact-filter {
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+}
+.filter-bar label {
+  margin: 0;
+}
+.filter-bar input,
+.filter-bar select {
+  height: 42px;
+  margin: 0;
+}
+.filter-bar .btn {
+  min-height: 42px;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.pager p {
+  margin: 0;
+}
+.pager > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tool-row .row-title code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.tool-row p strong {
+  color: var(--text);
+}
+.sticky-actions {
+  align-items: center;
+  gap: 16px;
+}
+.sticky-actions span {
+  color: var(--muted);
+  font-size: 13px;
+}
 @media (max-width: 760px) {
   .import-summary {
     align-items: flex-start;
@@ -86,5 +150,25 @@
   }
   .import-grid {
     grid-template-columns: 1fr;
+  }
+  .filter-bar,
+  .filter-bar.compact-filter {
+    grid-template-columns: 1fr 1fr;
+  }
+  .filter-bar label:first-child,
+  .filter-bar .wide-select {
+    grid-column: 1 / -1;
+  }
+  .pager {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .pager > div {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .credential-update form {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

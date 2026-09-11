@@ -61,6 +61,26 @@ func TestScanRootFindsWindowsHermesProfiles(t *testing.T) {
 	t.Fatalf("Windows Hermes profile not found: %#v", got)
 }
 
+func TestScanSkipsHermesHiddenSystemProfileAndNestedChatName(t *testing.T) {
+	home := t.TempDir()
+	base := filepath.Join(home, ".hermes")
+	mustWrite(t, filepath.Join(base, "config.yaml"), "mcp_servers: {}\n")
+	mustWrite(t, filepath.Join(base, "active_profile"), "ops\n")
+	mustWrite(t, filepath.Join(base, "profile.yaml"), "description: Hidden default system profile.\nui_meta:\n  chats:\n    - name: A group chat\n")
+	mustWrite(t, filepath.Join(base, "profiles", "ops", "config.yaml"), "mcp_servers: {}\n")
+
+	got := New([]string{home}).Scan(context.Background())
+	var mounted []Candidate
+	for _, candidate := range got {
+		if candidate.Environment == "Mounted host" && candidate.Runtime == "hermes" {
+			mounted = append(mounted, candidate)
+		}
+	}
+	if len(mounted) != 1 || mounted[0].Profile != "ops" {
+		t.Fatalf("unexpected Hermes candidates: %#v", mounted)
+	}
+}
+
 func mustWrite(t *testing.T, path, value string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

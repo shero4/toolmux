@@ -80,8 +80,12 @@ func (s *Scanner) scanHome(home, environment string, seen map[string]Candidate) 
 }
 
 func (s *Scanner) scanHermes(base, environment string, seen map[string]Candidate) {
-	if isFile(filepath.Join(base, "config.yaml")) || isFile(filepath.Join(base, "profile.yaml")) {
-		name := yamlName(filepath.Join(base, "profile.yaml"))
+	profilePath := filepath.Join(base, "profile.yaml")
+	activeProfile := strings.TrimSpace(readText(filepath.Join(base, "active_profile")))
+	_, description := yamlMetadata(profilePath)
+	hiddenDefault := activeProfile != "" && !strings.EqualFold(activeProfile, "default") || strings.Contains(strings.ToLower(description), "hidden default system profile")
+	if !hiddenDefault && (isFile(filepath.Join(base, "config.yaml")) || isFile(profilePath)) {
+		name, _ := yamlMetadata(profilePath)
 		if name == "" {
 			name = "Hermes · default"
 		}
@@ -96,7 +100,7 @@ func (s *Scanner) scanHermes(base, environment string, seen map[string]Candidate
 		if !isFile(filepath.Join(profileDir, "config.yaml")) && !isFile(filepath.Join(profileDir, "profile.yaml")) {
 			continue
 		}
-		name := yamlName(filepath.Join(profileDir, "profile.yaml"))
+		name, _ := yamlMetadata(filepath.Join(profileDir, "profile.yaml"))
 		if name == "" {
 			name = "Hermes · " + entry.Name()
 		}
@@ -170,7 +174,8 @@ func (s *Scanner) scanWSL(ctx context.Context, seen map[string]Candidate) {
 func (s *Scanner) scanWSLDistro(ctx context.Context, distro string, seen map[string]Candidate) {
 	const script = `
 home=$HOME
-if [ -f "$home/.hermes/config.yaml" ] || [ -f "$home/.hermes/profile.yaml" ]; then printf 'hermes\tdefault\tHermes - default\t%s\n' "$home/.hermes/config.yaml"; fi
+active=default; [ -f "$home/.hermes/active_profile" ] && active=$(cat "$home/.hermes/active_profile")
+if [ "$active" = default ] && { [ -f "$home/.hermes/config.yaml" ] || [ -f "$home/.hermes/profile.yaml" ]; }; then printf 'hermes\tdefault\tHermes - default\t%s\n' "$home/.hermes/config.yaml"; fi
 for p in "$home/.hermes/profiles"/*; do [ -d "$p" ] || continue; if [ -f "$p/config.yaml" ] || [ -f "$p/profile.yaml" ]; then n=${p##*/}; printf 'hermes\t%s\tHermes - %s\t%s\n' "$n" "$n" "$p/config.yaml"; fi; done
 for state in "$home/.openclaw" "$home"/.openclaw-*; do [ -d "$state" ] || continue; profile=${state##*/}; profile=${profile#.openclaw}; profile=${profile#-}; [ -n "$profile" ] || profile=default; found=0; for a in "$state/agents"/*/agent; do [ -d "$a" ] || continue; id=$(basename "$(dirname "$a")"); printf 'openclaw\t%s:%s\tOpenClaw - %s\t%s\n' "$profile" "$id" "$id" "$state/openclaw.json"; found=1; done; if [ "$found" = 0 ] && [ -f "$state/openclaw.json" ]; then printf 'openclaw\t%s:main\tOpenClaw - main\t%s\n' "$profile" "$state/openclaw.json"; fi; done
 `
@@ -197,18 +202,32 @@ func add(seen map[string]Candidate, runtimeName, profile, name, environment, con
 	seen[id] = Candidate{ID: id, Runtime: runtimeName, Profile: profile, Name: name, Environment: environment, ConfigPath: configPath}
 }
 
-func yamlName(path string) string {
+func yamlMetadata(path string) (name, description string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimLeft(line, " \t") != line {
+			continue
+		}
 		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if ok && key == "name" {
-			return strings.Trim(strings.TrimSpace(value), `"'`)
+		if !ok {
+			continue
+		}
+		switch key {
+		case "name":
+			name = strings.Trim(strings.TrimSpace(value), `"'`)
+		case "description":
+			description = strings.Trim(strings.TrimSpace(value), `"'`)
 		}
 	}
-	return ""
+	return name, description
+}
+
+func readText(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
 }
 
 func profileFromState(path string) string {

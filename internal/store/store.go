@@ -298,6 +298,17 @@ func (s *Store) AuthenticateAgent(ctx context.Context, token string) (Agent, err
 	return a, err
 }
 
+func (s *Store) DeleteAgent(ctx context.Context, id string) error {
+	command, err := s.pool.Exec(ctx, `DELETE FROM agents WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) ListConnections(ctx context.Context) ([]Connection, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.id, c.slug, x.slug, x.name, c.name, x.kind, coalesce(x.endpoint_url,''), x.health_path, c.auth_method, coalesce(c.auth_name,''), c.status,
@@ -644,6 +655,38 @@ func (s *Store) ToolsForGrantPage(ctx context.Context, agentID string) ([]Tool, 
 		WHERE t.enabled ORDER BY c.name,t.exposed_name`, agentID)
 }
 
+func (s *Store) SearchTools(ctx context.Context, query, kind, connectionID string, limit, offset int) ([]Tool, int, error) {
+	filter := `t.enabled AND ($1='' OR t.exposed_name ILIKE '%'||$1||'%' OR c.name ILIKE '%'||$1||'%' OR t.description ILIKE '%'||$1||'%')
+		AND ($2='' OR t.kind=$2) AND ($3='' OR t.connection_id::text=$3)`
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tools t JOIN connections c ON c.id=t.connection_id WHERE `+filter, query, kind, connectionID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	tools, err := s.queryTools(ctx, `
+		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,false
+		FROM tools t JOIN connections c ON c.id=t.connection_id WHERE `+filter+`
+		ORDER BY c.name,t.exposed_name LIMIT $4 OFFSET $5`, query, kind, connectionID, limit, offset)
+	return tools, total, err
+}
+
+func (s *Store) SearchToolsForAgentGrant(ctx context.Context, agentID, query, kind, connectionID string, limit, offset int) ([]Tool, int, error) {
+	countFilter := `t.enabled AND ($1='' OR t.exposed_name ILIKE '%'||$1||'%' OR c.name ILIKE '%'||$1||'%' OR t.description ILIKE '%'||$1||'%')
+		AND ($2='' OR t.kind=$2) AND ($3='' OR t.connection_id::text=$3)`
+	filter := `t.enabled AND ($2='' OR t.exposed_name ILIKE '%'||$2||'%' OR c.name ILIKE '%'||$2||'%' OR t.description ILIKE '%'||$2||'%')
+		AND ($3='' OR t.kind=$3) AND ($4='' OR t.connection_id::text=$4)`
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tools t JOIN connections c ON c.id=t.connection_id WHERE `+countFilter, query, kind, connectionID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	tools, err := s.queryTools(ctx, `
+		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,(g.agent_id IS NOT NULL)
+		FROM tools t JOIN connections c ON c.id=t.connection_id LEFT JOIN grants g ON g.tool_id=t.id AND g.agent_id=$1
+		WHERE `+filter+` ORDER BY c.name,t.exposed_name LIMIT $5 OFFSET $6`, agentID, query, kind, connectionID, limit, offset)
+	return tools, total, err
+}
+
 func (s *Store) queryTools(ctx context.Context, query string, args ...any) ([]Tool, error) {
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -852,6 +895,32 @@ func (s *Store) SetGrants(ctx context.Context, agentID string, toolIDs []string)
 	return tx.Commit(ctx)
 }
 
+func (s *Store) SetVisibleGrants(ctx context.Context, agentID string, visibleToolIDs, grantedToolIDs []string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if len(visibleToolIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM grants WHERE agent_id=$1 AND tool_id=ANY($2::uuid[])`, agentID, visibleToolIDs); err != nil {
+			return err
+		}
+	}
+	visible := make(map[string]struct{}, len(visibleToolIDs))
+	for _, id := range visibleToolIDs {
+		visible[id] = struct{}{}
+	}
+	for _, id := range grantedToolIDs {
+		if _, ok := visible[id]; !ok {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO grants(agent_id,tool_id) SELECT $1,id FROM tools WHERE id=$2 AND enabled ON CONFLICT DO NOTHING`, agentID, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) GetAgent(ctx context.Context, id string) (Agent, error) {
 	var a Agent
 	err := s.pool.QueryRow(ctx, `
@@ -906,6 +975,30 @@ func (s *Store) ListAudit(ctx context.Context, limit int) ([]AuditEvent, error) 
 		result = append(result, e)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) SearchAudit(ctx context.Context, query, decision, agentID string, limit, offset int) ([]AuditEvent, int, error) {
+	filter := `($1='' OR coalesce(a.name,'') ILIKE '%'||$1||'%' OR coalesce(c.name,'') ILIKE '%'||$1||'%' OR coalesce(t.exposed_name,'') ILIKE '%'||$1||'%')
+		AND ($2='' OR e.decision=$2) AND ($3='' OR e.agent_id::text=$3)`
+	joins := ` FROM audit_events e LEFT JOIN agents a ON a.id=e.agent_id LEFT JOIN connections c ON c.id=e.connection_id LEFT JOIN tools t ON t.id=e.tool_id `
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*)`+joins+`WHERE `+filter, query, decision, agentID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT coalesce(a.name,'Unknown'),coalesce(c.name,'—'),coalesce(t.exposed_name,'—'),e.method,e.decision,coalesce(e.reason,''),e.duration_ms,e.created_at`+joins+`WHERE `+filter+` ORDER BY e.created_at DESC LIMIT $4 OFFSET $5`, query, decision, agentID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var result []AuditEvent
+	for rows.Next() {
+		var event AuditEvent
+		if err := rows.Scan(&event.AgentName, &event.ConnectionName, &event.ToolName, &event.Method, &event.Decision, &event.Reason, &event.DurationMS, &event.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		result = append(result, event)
+	}
+	return result, total, rows.Err()
 }
 
 func Slug(value string) string {

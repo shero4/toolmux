@@ -64,6 +64,10 @@ Candidates are transient and identified by a stable hash of runtime, profile,
 environment, and configuration path. Generic agent import creates a normal agent
 and an `agent_installations` row in one database transaction.
 
+Hermes' root profile is considered an agent only when it is the active default
+profile. Hidden system-profile and nested group-chat metadata are deliberately
+excluded from identity discovery.
+
 The dedicated Hermes import deliberately goes further: it reads each profile's
 MCP definitions and local OAuth artifacts, encrypts the credentials in Toolmux,
 persists each profile-to-connection assignment, and adds a per-profile Toolmux

@@ -100,6 +100,10 @@ func New(store repository, scanner *discovery.Scanner, baseURL string) *Manager 
 	return &Manager{store: store, discovery: scanner, baseURL: strings.TrimRight(baseURL, "/")}
 }
 
+func (m *Manager) DisconnectProfile(configPath string) error {
+	return removeToolmuxServer(configPath)
+}
+
 func (m *Manager) Scan(ctx context.Context) (Inventory, error) {
 	var inventory Inventory
 	seen := make(map[string]bool)
@@ -437,11 +441,36 @@ func writeToolmuxServer(path, endpoint, token string) error {
 		scalar("supports_parallel_tool_calls"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
 	}}
 	setMappingValue(servers, "toolmux", entry)
+	return replaceYAML(path, &document, data, true)
+}
 
+func removeToolmuxServer(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return errors.New("configuration root is not a mapping")
+	}
+	servers := mappingValue(document.Content[0], "mcp_servers")
+	if servers == nil || servers.Kind != yaml.MappingNode {
+		return nil
+	}
+	removeMappingValue(servers, "toolmux")
+	return replaceYAML(path, &document, data, false)
+}
+
+func replaceYAML(path string, document *yaml.Node, original []byte, keepBackup bool) error {
 	backup := path + ".toolmux.bak"
-	if _, err := os.Stat(backup); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(backup, data, 0o600); err != nil {
-			return fmt.Errorf("create backup: %w", err)
+	if keepBackup {
+		if _, err := os.Stat(backup); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(backup, original, 0o600); err != nil {
+				return fmt.Errorf("create backup: %w", err)
+			}
 		}
 	}
 	info, err := os.Stat(path)
@@ -456,7 +485,7 @@ func writeToolmuxServer(path, endpoint, token string) error {
 	defer os.Remove(temporaryPath)
 	encoder := yaml.NewEncoder(temporary)
 	encoder.SetIndent(2)
-	if err := encoder.Encode(&document); err != nil {
+	if err := encoder.Encode(document); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -531,6 +560,15 @@ func setMappingValue(mapping *yaml.Node, key string, value *yaml.Node) {
 		}
 	}
 	mapping.Content = append(mapping.Content, scalar(key), value)
+}
+
+func removeMappingValue(mapping *yaml.Node, key string) {
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == key {
+			mapping.Content = append(mapping.Content[:index], mapping.Content[index+2:]...)
+			return
+		}
+	}
 }
 
 func scalar(value string) *yaml.Node {

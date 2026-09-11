@@ -66,10 +66,12 @@ A container cannot see host files unless they are mounted. Set
 docker compose -f compose.yaml -f compose.discovery.yaml up --build
 ```
 
-The host home is mounted read-only. Toolmux looks for Hermes' default profile
-and named profiles below its standard data directory, plus OpenClaw agents
+The host home is mounted read-only. Toolmux looks for Hermes' active default
+profile and named profiles below its standard data directory, plus OpenClaw agents
 below `.openclaw` and named `.openclaw-*` state directories. You can instead set
 `TOOLMUX_DISCOVERY_ROOTS` to an OS path-list when running the binary directly.
+Hermes' hidden system profile and its group-chat metadata are not imported as
+agent identities.
 
 ### Import Hermes
 

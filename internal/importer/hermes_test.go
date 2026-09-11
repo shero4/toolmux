@@ -58,4 +58,21 @@ func TestWriteToolmuxServerReplacesConfigAndKeepsBackup(t *testing.T) {
 	if !strings.Contains(string(updated), "existing:") {
 		t.Fatal("existing MCP configuration was not preserved")
 	}
+	if err := removeToolmuxServer(path); err != nil {
+		t.Fatal(err)
+	}
+	configured, err = hasToolmuxServer(path, "http://localhost:8080/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured {
+		t.Fatal("Toolmux entry was not removed")
+	}
+	updated, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(updated), "existing:") {
+		t.Fatal("existing MCP configuration was removed")
+	}
 }

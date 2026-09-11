@@ -38,16 +38,28 @@ type Server struct {
 
 type pageData struct {
 	Page, Title, Notice, Error, Token      string
+	Query, KindFilter, StatusFilter        string
+	DecisionFilter, ConnectionFilter       string
+	AgentFilter, ReturnURL                 string
 	Agents                                 []store.Agent
+	AgentOptions                           []store.Agent
 	Discovered                             []discovery.Candidate
 	Scanned                                bool
 	Setup                                  setupGuide
 	Agent                                  store.Agent
 	Connections                            []store.Connection
+	ConnectionOptions                      []store.Connection
 	Tools                                  []store.Tool
 	Events                                 []store.AuditEvent
 	Hermes                                 importer.Inventory
 	AgentCount, ConnectionCount, ToolCount int
+	Pager                                  pager
+}
+
+type pager struct {
+	Page, Pages, Total, From, To int
+	PreviousURL, NextURL         string
+	HasPrevious, HasNext         bool
 }
 
 type setupGuide struct {
@@ -62,7 +74,14 @@ func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, disco
 			return "Never"
 		}
 		return value.Local().Format("Jan 2, 15:04")
-	}, "time": func(value time.Time) string { return value.Local().Format("Jan 2, 15:04:05") }, "status": func(value string) string { return strings.ReplaceAll(value, "_", " ") }}
+	}, "time": func(value time.Time) string { return value.Local().Format("Jan 2, 15:04:05") }, "status": func(value string) string { return strings.ReplaceAll(value, "_", " ") }, "short": func(value string) string {
+		const limit = 220
+		value = strings.TrimSpace(value)
+		if len(value) <= limit {
+			return value
+		}
+		return strings.TrimSpace(value[:limit]) + "…"
+	}}
 	templates, err := template.New("pages.html").Funcs(functions).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -95,6 +114,7 @@ func (s *Server) Handler(mcpHandler http.Handler) http.Handler {
 	mux.HandleFunc("GET /agents/{id}", s.agentAccess)
 	mux.HandleFunc("POST /agents/{id}/grants", s.saveGrants)
 	mux.HandleFunc("POST /agents/{id}/disable", s.disableAgent)
+	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("GET /activity", s.activity)
 	return s.securityHeaders(s.sameOrigin(mux))
 }
@@ -106,6 +126,9 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, _ := s.store.ListConnections(r.Context())
+	if len(items) > 6 {
+		items = items[:6]
+	}
 	events, _ := s.store.ListAudit(r.Context(), 8)
 	s.render(w, pageData{Page: "dashboard", Title: "Overview", AgentCount: agents, ConnectionCount: connections, ToolCount: tools, Connections: items, Events: events})
 }
@@ -115,7 +138,19 @@ func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, pageData{Page: "connections", Title: "Connections", Connections: items, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	kind, status := r.URL.Query().Get("kind"), r.URL.Query().Get("status")
+	filtered := items[:0]
+	for _, item := range items {
+		matchesQuery := query == "" || containsFold(item.Name, query) || containsFold(item.ConnectorName, query) || containsFold(item.Slug, query)
+		if matchesQuery && (kind == "" || item.Kind == kind) && (status == "" || item.Status == status) {
+			filtered = append(filtered, item)
+		}
+	}
+	page := pageNumber(r)
+	pagination := newPager(r, page, len(filtered), 15)
+	filtered = pageSlice(filtered, pagination, 15)
+	s.render(w, pageData{Page: "connections", Title: "Connections", Connections: filtered, Query: query, KindFilter: kind, StatusFilter: status, Pager: pagination, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
 }
 func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
 	items, err := s.store.ListAgents(r.Context())
@@ -123,11 +158,25 @@ func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	data := pageData{Page: "agents", Title: "Agents", Agents: items, Token: r.URL.Query().Get("token"), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")}
+	allItems := items
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query != "" {
+		items = nil
+		for _, item := range allItems {
+			if containsFold(item.Name, query) || containsFold(item.Slug, query) || containsFold(item.Runtime, query) || containsFold(item.Profile, query) {
+				items = append(items, item)
+			}
+		}
+	}
+	page := pageNumber(r)
+	const pageSize = 20
+	pagination := newPager(r, page, len(items), pageSize)
+	items = pageSlice(items, pagination, pageSize)
+	data := pageData{Page: "agents", Title: "Agents", Agents: items, Query: query, Pager: pagination, Token: r.URL.Query().Get("token"), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")}
 	if r.URL.Query().Get("discover") == "1" {
 		data.Scanned = true
 		imported := make(map[string]bool)
-		for _, agent := range items {
+		for _, agent := range allItems {
 			imported[agent.SourceKey] = true
 		}
 		for _, candidate := range s.discovery.Scan(r.Context()) {
@@ -226,25 +275,54 @@ func (s *Server) importAgent(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 func (s *Server) tools(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ListTools(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
 	connections, err := s.store.ListConnections(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, pageData{Page: "tools", Title: "Tools", Tools: items, Connections: connections, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
-}
-func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
-	events, err := s.store.ListAudit(r.Context(), 100)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	kind, connectionID := r.URL.Query().Get("kind"), r.URL.Query().Get("connection")
+	page := pageNumber(r)
+	const pageSize = 25
+	items, total, err := s.store.SearchTools(r.Context(), query, kind, connectionID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, pageData{Page: "activity", Title: "Activity", Events: events})
+	pagination := newPager(r, page, total, pageSize)
+	if pagination.Page != page {
+		items, _, err = s.store.SearchTools(r.Context(), query, kind, connectionID, pageSize, (pagination.Page-1)*pageSize)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	s.render(w, pageData{Page: "tools", Title: "Tools", Tools: items, ConnectionOptions: connections, Query: query, KindFilter: kind, ConnectionFilter: connectionID, Pager: pagination, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
+}
+func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	decision, agentID := r.URL.Query().Get("decision"), r.URL.Query().Get("agent")
+	page := pageNumber(r)
+	const pageSize = 30
+	events, total, err := s.store.SearchAudit(r.Context(), query, decision, agentID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	pagination := newPager(r, page, total, pageSize)
+	if pagination.Page != page {
+		events, _, err = s.store.SearchAudit(r.Context(), query, decision, agentID, pageSize, (pagination.Page-1)*pageSize)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	s.render(w, pageData{Page: "activity", Title: "Activity", Events: events, AgentOptions: agents, Query: query, DecisionFilter: decision, AgentFilter: agentID, Pager: pagination})
 }
 
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
@@ -480,12 +558,30 @@ func (s *Server) agentAccess(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tools, err := s.store.ToolsForGrantPage(r.Context(), agent.ID)
+	connections, err := s.store.ListConnections(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, pageData{Page: "agent-access", Title: "Agent access", Agent: agent, Tools: tools, Notice: r.URL.Query().Get("notice")})
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	kind, connectionID := r.URL.Query().Get("kind"), r.URL.Query().Get("connection")
+	page := pageNumber(r)
+	const pageSize = 40
+	tools, total, err := s.store.SearchToolsForAgentGrant(r.Context(), agent.ID, query, kind, connectionID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	pagination := newPager(r, page, total, pageSize)
+	if pagination.Page != page {
+		tools, _, err = s.store.SearchToolsForAgentGrant(r.Context(), agent.ID, query, kind, connectionID, pageSize, (pagination.Page-1)*pageSize)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	returnURL := r.URL.RequestURI()
+	s.render(w, pageData{Page: "agent-access", Title: "Agent access", Agent: agent, Tools: tools, ConnectionOptions: connections, Query: query, KindFilter: kind, ConnectionFilter: connectionID, Pager: pagination, ReturnURL: returnURL, Notice: r.URL.Query().Get("notice")})
 }
 func (s *Server) saveGrants(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -493,11 +589,16 @@ func (s *Server) saveGrants(w http.ResponseWriter, r *http.Request) {
 		s.redirectError(w, r, "/agents/"+id, "Invalid form")
 		return
 	}
-	if err := s.store.SetGrants(r.Context(), id, r.Form["tool_id"]); err != nil {
+	if err := s.store.SetVisibleGrants(r.Context(), id, r.Form["visible_tool_id"], r.Form["tool_id"]); err != nil {
 		s.redirectError(w, r, "/agents/"+id, "Could not save access")
 		return
 	}
-	http.Redirect(w, r, "/agents/"+id+"?notice="+url.QueryEscape("Access updated."), http.StatusSeeOther)
+	target := r.FormValue("return_url")
+	if !strings.HasPrefix(target, "/agents/"+id) {
+		target = "/agents/" + id
+	}
+	target += map[bool]string{true: "&", false: "?"}[strings.Contains(target, "?")] + "notice=" + url.QueryEscape("Access updated for this page.")
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) disableAgent(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +607,27 @@ func (s *Server) disableAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/agents?notice="+url.QueryEscape("Agent disabled and all of its tokens revoked."), http.StatusSeeOther)
+}
+
+func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	agent, err := s.store.GetAgent(r.Context(), id)
+	if err != nil {
+		s.redirectError(w, r, "/agents", "Agent not found")
+		return
+	}
+	if agent.Runtime == "hermes" && agent.ConfigPath != "" {
+		if err := s.importer.DisconnectProfile(agent.ConfigPath); err != nil {
+			s.log.Error("disconnect Hermes profile", "error", err)
+			s.redirectError(w, r, "/agents", "The Hermes configuration could not be updated")
+			return
+		}
+	}
+	if err := s.store.DeleteAgent(r.Context(), id); err != nil {
+		s.redirectError(w, r, "/agents", "Could not delete agent")
+		return
+	}
+	http.Redirect(w, r, "/agents?notice="+url.QueryEscape("Agent deleted and its Toolmux access removed."), http.StatusSeeOther)
 }
 
 func (s *Server) render(w http.ResponseWriter, data pageData) {
@@ -555,6 +677,56 @@ func durationMS(value string, fallbackSeconds int) int {
 		seconds = fallbackSeconds
 	}
 	return seconds * 1000
+}
+
+func pageNumber(r *http.Request) int {
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page < 1 {
+		return 1
+	}
+	return page
+}
+
+func newPager(r *http.Request, requested, total, pageSize int) pager {
+	pages := (total + pageSize - 1) / pageSize
+	if pages < 1 {
+		pages = 1
+	}
+	page := requested
+	if page > pages {
+		page = pages
+	}
+	from := 0
+	to := 0
+	if total > 0 {
+		from = (page-1)*pageSize + 1
+		to = min(page*pageSize, total)
+	}
+	result := pager{Page: page, Pages: pages, Total: total, From: from, To: to, HasPrevious: page > 1, HasNext: page < pages}
+	pageURL := func(value int) string {
+		query := r.URL.Query()
+		query.Set("page", strconv.Itoa(value))
+		return r.URL.Path + "?" + query.Encode()
+	}
+	if result.HasPrevious {
+		result.PreviousURL = pageURL(page - 1)
+	}
+	if result.HasNext {
+		result.NextURL = pageURL(page + 1)
+	}
+	return result
+}
+
+func pageSlice[T any](items []T, pagination pager, pageSize int) []T {
+	if len(items) == 0 {
+		return items
+	}
+	start := (pagination.Page - 1) * pageSize
+	return items[start:min(start+pageSize, len(items))]
+}
+
+func containsFold(value, query string) bool {
+	return strings.Contains(strings.ToLower(value), strings.ToLower(query))
 }
 
 func (s *Server) sameOrigin(next http.Handler) http.Handler {
