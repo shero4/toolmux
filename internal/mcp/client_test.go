@@ -19,24 +19,23 @@ func TestDiscoverAndCall(t *testing.T) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if r.Method == http.MethodDelete {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
 		var request rpcRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch request.Method {
-		case "initialize":
-			w.Header().Set("Mcp-Session-Id", "test-session")
-			writeTestResult(t, w, request.ID, map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{}})
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
+		case "server/discover":
+			if r.Header.Get("MCP-Protocol-Version") != modernProtocol || r.Header.Get("Mcp-Method") != "server/discover" {
+				t.Errorf("missing modern protocol headers")
+			}
+			writeTestResult(t, w, request.ID, map[string]any{"resultType": "complete", "supportedVersions": []string{modernProtocol}, "capabilities": map[string]any{"tools": map[string]any{}}})
 		case "tools/list":
 			writeTestResult(t, w, request.ID, map[string]any{"tools": []map[string]any{{"name": "balance", "description": "Read balance", "inputSchema": map[string]any{"type": "object"}}}})
 		case "tools/call":
+			if r.Header.Get("Mcp-Name") != "balance" {
+				t.Errorf("Mcp-Name = %q", r.Header.Get("Mcp-Name"))
+			}
 			writeTestResult(t, w, request.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": "ok"}}})
 		default:
 			t.Fatalf("unexpected method %q", request.Method)
@@ -54,12 +53,38 @@ func TestDiscoverAndCall(t *testing.T) {
 	if len(tools) != 1 || tools[0].UpstreamName != "balance" {
 		t.Fatalf("unexpected tools: %#v", tools)
 	}
-	result, err := client.Call(context.Background(), connection, credential, "balance", json.RawMessage(`{}`))
+	result, err := client.Call(context.Background(), connection, credential, "balance", store.ToolCall{Arguments: json.RawMessage(`{}`)}, json.RawMessage(`{"type":"object"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !json.Valid(result) {
 		t.Fatalf("invalid result: %s", result)
+	}
+}
+
+func TestFallsBackToLegacyHandshake(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request rpcRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case "server/discover":
+			writeTestError(t, w, request.ID, -32601, "method not found")
+		case "initialize":
+			writeTestResult(t, w, request.ID, map[string]any{"protocolVersion": legacyProtocol, "capabilities": map[string]any{}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeTestResult(t, w, request.ID, map[string]any{"tools": []any{}})
+		default:
+			t.Fatalf("unexpected method %q", request.Method)
+		}
+	}))
+	defer server.Close()
+	if _, err := NewClient().Discover(context.Background(), store.Connection{EndpointURL: server.URL}, store.Credential{}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -92,6 +117,13 @@ func TestDecodeLargeServerSentEvent(t *testing.T) {
 func writeTestResult(t *testing.T, w http.ResponseWriter, id int64, result any) {
 	t.Helper()
 	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestError(t *testing.T, w http.ResponseWriter, id int64, code int, message string) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}}); err != nil {
 		t.Fatal(err)
 	}
 }

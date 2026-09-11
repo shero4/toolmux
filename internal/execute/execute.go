@@ -31,7 +31,7 @@ func New(store *store.Store, mcpClient *mcp.Client) *Router {
 	return &Router{store: store, mcp: mcpClient, http: &http.Client{}}
 }
 
-func (r *Router) Call(ctx context.Context, tool store.Tool, connection store.Connection, credential store.Credential, arguments json.RawMessage) (json.RawMessage, error) {
+func (r *Router) Call(ctx context.Context, tool store.Tool, connection store.Connection, credential store.Credential, call store.ToolCall) (json.RawMessage, error) {
 	switch tool.Kind {
 	case "mcp":
 		if connection.Kind == "mcp_stdio" {
@@ -39,13 +39,13 @@ func (r *Router) Call(ctx context.Context, tool store.Tool, connection store.Con
 			if err != nil {
 				return nil, err
 			}
-			return r.mcp.CallStdio(ctx, spec, credential, tool.UpstreamName, arguments)
+			return r.mcp.CallStdio(ctx, spec, credential, tool.UpstreamName, call)
 		}
-		return r.mcp.Call(ctx, connection, credential, tool.UpstreamName, arguments)
+		return r.mcp.Call(ctx, connection, credential, tool.UpstreamName, call, tool.InputSchema)
 	case "http":
-		return r.callHTTP(ctx, tool, connection, credential, arguments)
+		return r.callHTTP(ctx, tool, connection, credential, call.Arguments)
 	case "command":
-		return r.callCommand(ctx, tool, credential, arguments)
+		return r.callCommand(ctx, tool, credential, call.Arguments)
 	default:
 		return nil, fmt.Errorf("unsupported tool kind %q", tool.Kind)
 	}

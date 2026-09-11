@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -45,8 +47,11 @@ type rpcError struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+func (e *rpcError) Error() string { return fmt.Sprintf("%s (%d)", e.Message, e.Code) }
+
 type listToolsResult struct {
-	Tools []wireTool `json:"tools"`
+	Tools      []wireTool `json:"tools"`
+	NextCursor string     `json:"nextCursor"`
 }
 
 type wireTool struct {
@@ -56,10 +61,11 @@ type wireTool struct {
 	InputSchema  json.RawMessage `json:"inputSchema"`
 	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 	Annotations  json.RawMessage `json:"annotations,omitempty"`
+	Icons        json.RawMessage `json:"icons,omitempty"`
 }
 
 func NewClient() *Client {
-	return &Client{http: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{http: &http.Client{Timeout: 45 * time.Second}}
 }
 
 func (c *Client) Discover(ctx context.Context, connection store.Connection, credential store.Credential) ([]store.Tool, error) {
@@ -68,28 +74,46 @@ func (c *Client) Discover(ctx context.Context, connection store.Connection, cred
 		return nil, err
 	}
 	defer session.close(ctx)
-	var result listToolsResult
-	if err := session.call(ctx, "tools/list", map[string]any{}, &result); err != nil {
-		return nil, err
-	}
-	tools := make([]store.Tool, 0, len(result.Tools))
-	for _, tool := range result.Tools {
-		if len(tool.InputSchema) == 0 {
-			tool.InputSchema = json.RawMessage(`{"type":"object"}`)
+	var tools []store.Tool
+	cursor := ""
+	for {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
 		}
-		tools = append(tools, store.Tool{UpstreamName: tool.Name, Title: tool.Title, Description: tool.Description, InputSchema: tool.InputSchema, OutputSchema: tool.OutputSchema, Annotations: tool.Annotations})
+		var result listToolsResult
+		if err := session.call(ctx, "tools/list", params, &result); err != nil {
+			return nil, err
+		}
+		for _, tool := range result.Tools {
+			if len(tool.InputSchema) == 0 {
+				tool.InputSchema = json.RawMessage(`{"type":"object"}`)
+			}
+			tools = append(tools, store.Tool{UpstreamName: tool.Name, Title: tool.Title, Description: tool.Description, InputSchema: tool.InputSchema, OutputSchema: tool.OutputSchema, Annotations: tool.Annotations, Icons: tool.Icons})
+		}
+		if result.NextCursor == "" {
+			break
+		}
+		cursor = result.NextCursor
 	}
 	return tools, nil
 }
 
-func (c *Client) Call(ctx context.Context, connection store.Connection, credential store.Credential, tool string, arguments json.RawMessage) (json.RawMessage, error) {
+func (c *Client) Call(ctx context.Context, connection store.Connection, credential store.Credential, tool string, call store.ToolCall, inputSchema json.RawMessage) (json.RawMessage, error) {
 	session, err := c.connect(ctx, connection, credential)
 	if err != nil {
 		return nil, err
 	}
 	defer session.close(ctx)
+	params := map[string]any{"name": tool, "arguments": json.RawMessage(call.Arguments)}
+	if len(call.InputResponses) > 0 {
+		params["inputResponses"] = call.InputResponses
+	}
+	if len(call.RequestState) > 0 {
+		params["requestState"] = call.RequestState
+	}
+	session.parameterHeaders = parameterHeaders(inputSchema, call.Arguments)
 	var result json.RawMessage
-	params := map[string]any{"name": tool, "arguments": json.RawMessage(arguments)}
 	if err := session.call(ctx, "tools/call", params, &result); err != nil {
 		return nil, err
 	}
@@ -97,28 +121,34 @@ func (c *Client) Call(ctx context.Context, connection store.Connection, credenti
 }
 
 type session struct {
-	client     *Client
-	connection store.Connection
-	credential store.Credential
-	sessionID  string
+	client           *Client
+	connection       store.Connection
+	credential       store.Credential
+	sessionID        string
+	protocolVersion  string
+	modern           bool
+	parameterHeaders map[string]string
 }
 
 func (c *Client) connect(ctx context.Context, connection store.Connection, credential store.Credential) (*session, error) {
-	s := &session{client: c, connection: connection, credential: credential}
-	params := map[string]any{
-		"protocolVersion": "2025-11-25",
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]string{"name": "toolmux", "version": "0.1.0"},
+	s := &session{client: c, connection: connection, credential: credential, protocolVersion: modernProtocol, modern: true}
+	var discovery json.RawMessage
+	if err := s.call(ctx, "server/discover", map[string]any{}, &discovery); err == nil {
+		return s, nil
+	} else if errors.Is(err, ErrUnauthorized) {
+		return nil, err
 	}
+	s = &session{client: c, connection: connection, credential: credential, protocolVersion: legacyProtocol}
 	var initialized struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
-	if err := s.call(ctx, "initialize", params, &initialized); err != nil {
+	if err := s.call(ctx, "initialize", map[string]any{"protocolVersion": legacyProtocol, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "toolmux", "version": "0.2.0"}}, &initialized); err != nil {
 		return nil, err
 	}
 	if initialized.ProtocolVersion == "" {
 		return nil, errors.New("upstream returned no protocol version")
 	}
+	s.protocolVersion = initialized.ProtocolVersion
 	if err := s.notify(ctx, "notifications/initialized", map[string]any{}); err != nil {
 		return nil, err
 	}
@@ -126,13 +156,16 @@ func (c *Client) connect(ctx context.Context, connection store.Connection, crede
 }
 
 func (s *session) call(ctx context.Context, method string, params any, result any) error {
+	if s.modern {
+		params = modernParams(params)
+	}
 	id := s.client.ids.Add(1)
 	response, err := s.send(ctx, rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}, true)
 	if err != nil {
 		return err
 	}
 	if response.Error != nil {
-		return fmt.Errorf("upstream %s: %s (%d)", method, response.Error.Message, response.Error.Code)
+		return fmt.Errorf("upstream %s: %w", method, response.Error)
 	}
 	if result == nil {
 		return nil
@@ -148,6 +181,20 @@ func (s *session) notify(ctx context.Context, method string, params any) error {
 	return err
 }
 
+func modernParams(params any) map[string]any {
+	result := map[string]any{}
+	if params != nil {
+		data, _ := json.Marshal(params)
+		_ = json.Unmarshal(data, &result)
+	}
+	result["_meta"] = map[string]any{
+		"io.modelcontextprotocol/protocolVersion":    modernProtocol,
+		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+		"io.modelcontextprotocol/clientInfo":         map[string]string{"name": "toolmux", "version": "0.2.0"},
+	}
+	return result
+}
+
 func (s *session) send(ctx context.Context, payload rpcRequest, expectResponse bool) (rpcResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -159,7 +206,16 @@ func (s *session) send(ctx context.Context, payload rpcRequest, expectResponse b
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("MCP-Protocol-Version", s.protocolVersion)
+	if s.modern {
+		req.Header.Set("Mcp-Method", payload.Method)
+		if name := requestName(payload.Params); name != "" {
+			req.Header.Set("Mcp-Name", encodeHeaderValue(name))
+		}
+		for name, value := range s.parameterHeaders {
+			req.Header.Set("Mcp-Param-"+name, value)
+		}
+	}
 	if s.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", s.sessionID)
 	}
@@ -185,9 +241,72 @@ func (s *session) send(ctx context.Context, payload rpcRequest, expectResponse b
 	return decodeResponse(resp)
 }
 
+func requestName(params any) string {
+	data, _ := json.Marshal(params)
+	var value struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(data, &value)
+	return value.Name
+}
+
+func parameterHeaders(schema, arguments json.RawMessage) map[string]string {
+	var definition struct {
+		Properties map[string]struct {
+			Type   string `json:"type"`
+			Header string `json:"x-mcp-header"`
+		} `json:"properties"`
+	}
+	var values map[string]any
+	if json.Unmarshal(schema, &definition) != nil || json.Unmarshal(arguments, &values) != nil {
+		return nil
+	}
+	result := map[string]string{}
+	for property, spec := range definition.Properties {
+		if spec.Header == "" {
+			continue
+		}
+		value, ok := values[property]
+		if !ok {
+			continue
+		}
+		var encoded string
+		switch typed := value.(type) {
+		case string:
+			encoded = typed
+		case bool:
+			encoded = strconv.FormatBool(typed)
+		case float64:
+			if spec.Type != "integer" {
+				continue
+			}
+			encoded = strconv.FormatInt(int64(typed), 10)
+		default:
+			continue
+		}
+		result[spec.Header] = encodeHeaderValue(encoded)
+	}
+	return result
+}
+
+func encodeHeaderValue(value string) string {
+	if asciiHeaderValue(value) && strings.Trim(value, " \t") == value && !(strings.HasPrefix(value, "=?base64?") && strings.HasSuffix(value, "?=")) {
+		return value
+	}
+	return "=?base64?" + base64.StdEncoding.EncodeToString([]byte(value)) + "?="
+}
+
+func asciiHeaderValue(value string) bool {
+	for _, character := range value {
+		if character != '\t' && (character < 0x20 || character > 0x7e) {
+			return false
+		}
+	}
+	return true
+}
+
 func decodeResponse(resp *http.Response) (rpcResponse, error) {
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "text/event-stream") {
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxMessageSize))
 		scanner.Buffer(make([]byte, 64<<10), maxMessageSize)
 		for scanner.Scan() {
@@ -221,8 +340,7 @@ func (s *session) close(ctx context.Context) {
 	}
 	req.Header.Set("Mcp-Session-Id", s.sessionID)
 	s.applyCredential(req)
-	resp, err := s.client.http.Do(req)
-	if err == nil {
+	if resp, err := s.client.http.Do(req); err == nil {
 		resp.Body.Close()
 	}
 }

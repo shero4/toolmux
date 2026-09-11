@@ -11,14 +11,27 @@ It is not an agent runtime, identity provider, secret manager, model gateway, or
 host sandbox. The operator trusts the Toolmux host and everything deliberately
 installed or configured on it.
 
+Runtime and control traffic are separate. `/mcp` accepts revocable per-agent
+tokens and enforces grants. `/admin/mcp` accepts a deterministic installation
+admin token derived from the master key and exposes the small set of management
+operations also available in the web interface. Ordinary agents cannot
+self-grant.
+
 ## Request path
 
 1. Hash the inbound bearer token and resolve one active agent identity.
-2. For `tools/list`, return only tools joined through an active grant.
+2. For `tools/list`, return only tools joined through an active grant, in a
+   stable paginated order.
 3. For `tools/call`, resolve the exposed tool name through the same grant.
 4. Decrypt the selected connection credential only for the outbound request.
 5. Route to one bounded executor: MCP, HTTP, or direct command invocation.
 6. Record the decision and outcome without credentials or response payloads.
+
+Toolmux accepts the current stateless MCP 2026-07-28 envelope and the
+handshake-era revisions used by existing clients. It probes upstream MCPs for
+the modern lifecycle first and falls back to `initialize` on a legacy response.
+Standard routing and parameter headers are validated or forwarded, and result
+payloads remain structurally intact.
 
 The MVP opens a short upstream session for each operation. This trades a small
 amount of latency for simple failure isolation. Session pooling can be introduced

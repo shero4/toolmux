@@ -144,6 +144,11 @@
 .tool-row p strong {
   color: var(--text);
 }
+.setup-step {
+  flex-direction: row;
+  align-items: center;
+  text-align: left;
+}
 .sticky-actions {
   align-items: center;
   gap: 16px;

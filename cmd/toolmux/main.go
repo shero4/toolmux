@@ -19,6 +19,7 @@ import (
 
 	"github.com/shero4/toolmux/internal/checker"
 	"github.com/shero4/toolmux/internal/config"
+	"github.com/shero4/toolmux/internal/control"
 	"github.com/shero4/toolmux/internal/discovery"
 	"github.com/shero4/toolmux/internal/execute"
 	"github.com/shero4/toolmux/internal/importer"
@@ -47,6 +48,10 @@ func main() {
 	if err != nil {
 		log.Error("invalid configuration", "error", err)
 		os.Exit(1)
+	}
+	if len(os.Args) == 2 && os.Args[1] == "admin-token" {
+		fmt.Println(control.Token(cfg.MasterKey))
+		return
 	}
 	box, err := secretbox.New(cfg.MasterKey)
 	if err != nil {
@@ -86,7 +91,8 @@ func main() {
 		os.Exit(1)
 	}
 	mcpHandler := mcp.NewHandler(db, executor, oauthManager, log)
-	server := &http.Server{Addr: cfg.Addr, Handler: ui.Handler(mcpHandler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
+	adminHandler := control.New(db, health, hermesImporter, control.Token(cfg.MasterKey))
+	server := &http.Server{Addr: cfg.Addr, Handler: ui.Handler(mcpHandler, adminHandler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
 	go health.Run(ctx, 5*time.Minute)
 	go func() {
 		log.Info("toolmux started", "addr", cfg.Addr)

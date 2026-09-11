@@ -12,6 +12,8 @@ security boundary is the agent-facing MCP endpoint and its per-agent grants.
 ## What works
 
 - One Streamable HTTP endpoint at `/mcp` for every agent
+- MCP 2026-07-28 stateless discovery plus handshake-era compatibility through
+  2025-11-25
 - Hashed, individually revocable agent tokens
 - Remote Streamable HTTP MCP connections with automatic tool discovery
 - Local stdio MCP processes with imported arguments and environment
@@ -21,7 +23,8 @@ security boundary is the agent-facing MCP endpoint and its per-agent grants.
 - No-auth, bearer-token, and OAuth 2.0 upstream authentication
 - Authorization Code + PKCE, encrypted refresh tokens, and refresh before expiry
 - Tool discovery with stable `connection__tool` names
-- Per-agent tool grants, enforced on discovery and invocation
+- Per-agent connection assignments and individual tool grants, enforced on
+  discovery and invocation
 - Read-only discovery of Hermes and OpenClaw agents on the host and in WSL
 - One-click Hermes import for profiles, MCP instances, OAuth state, API keys,
   and local `gws-*` identities
@@ -104,6 +107,58 @@ Authorization: Bearer <agent token>
 
 Tokens are displayed once. Toolmux stores only their SHA-256 hashes.
 
+No prompt text or copied tool catalog is required. The MCP client calls
+`tools/list`, and Toolmux returns only that token's current grants. Assigning a
+whole connection keeps newly discovered capabilities in sync automatically.
+Issue another token from the agent page when the same agent identity runs in a
+second place.
+
+### Codex
+
+Put the token in an environment variable, then add this to `config.toml`:
+
+```toml
+[mcp_servers.toolmux]
+url = "http://localhost:8080/mcp"
+bearer_token_env_var = "TOOLMUX_AGENT_TOKEN"
+required = true
+```
+
+### Claude Code
+
+```sh
+claude mcp add --transport http toolmux http://localhost:8080/mcp \
+  --header "Authorization: Bearer $TOOLMUX_AGENT_TOKEN"
+```
+
+### Generic clients
+
+Use Streamable HTTP with the Toolmux URL and
+`Authorization: Bearer <agent token>`. Toolmux supports both the current
+2026-07-28 stateless protocol and older clients that use
+`initialize`/`notifications/initialized`.
+
+## Let an agent configure Toolmux
+
+Toolmux keeps runtime access and administrative access separate:
+
+- `/mcp` uses an agent token and can only discover or call assigned capabilities.
+- `/admin/mcp` uses the installation's admin token and can create agents, issue
+  their runtime tokens, assign connections, check health, and run the Hermes
+  import.
+
+Print the deterministic admin token from the same installation key:
+
+```sh
+toolmux admin-token
+```
+
+Connect a trusted setup agent to `http://localhost:8080/admin/mcp` with that
+token. It discovers the management operations through MCP like any other tool
+server. Do not put the admin token in ordinary agent profiles. The web interface
+uses the same store operations, so connection assignments and token issuance
+behave identically from the UI and the control endpoint.
+
 Imported Hermes profiles are configured automatically by the dedicated import
 flow. The generic discovery flow remains read-only and shows setup instructions
 for Hermes and OpenClaw.
@@ -156,5 +211,9 @@ Per-tool timeouts prevent accidental hangs and may be set up to one hour.
   health status explains why an upstream may currently be unavailable.
 - Import assignments are durable. Tools discovered later on an assigned
   connection are granted to the same agents automatically.
+- Tool listing is deterministic and paginated. Tool definitions retain titles,
+  schemas, annotations, and icons; tool results pass through text, images, audio,
+  resource links, embedded resources, structured content, errors, and modern
+  multi-round-trip input requests without payload rewriting.
 
 See [DESIGN.md](DESIGN.md) for the architecture and data model.

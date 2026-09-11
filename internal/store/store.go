@@ -33,19 +33,32 @@ type Agent struct {
 	LastUsedAt                                           *time.Time
 }
 
+type AgentToken struct {
+	ID, Label, Prefix string
+	CreatedAt         time.Time
+	LastUsedAt        *time.Time
+}
+
 type Connection struct {
 	ID, Slug, ConnectorSlug, ConnectorName, Name, Kind, EndpointURL, HealthPath, AuthMethod, AuthName, Status string
 	LastCheckedAt                                                                                             *time.Time
 	LastError                                                                                                 string
 	ToolCount, GrantedCount                                                                                   int
+	Assigned                                                                                                  bool
 }
 
 type Tool struct {
 	ID, ConnectionID, ConnectionName, Kind, UpstreamName, ExposedName string
 	Title, Description                                                string
 	InputSchema                                                       json.RawMessage
-	OutputSchema, Annotations                                         json.RawMessage
+	OutputSchema, Annotations, Icons                                  json.RawMessage
 	Enabled, Granted                                                  bool
+}
+
+type ToolCall struct {
+	Arguments      json.RawMessage
+	InputResponses map[string]json.RawMessage
+	RequestState   json.RawMessage
 }
 
 type HTTPToolSpec struct {
@@ -218,6 +231,38 @@ func (s *Store) IssueAgentToken(ctx context.Context, agentID, label string) (str
 	return token, nil
 }
 
+func (s *Store) ListAgentTokens(ctx context.Context, agentID string) ([]AgentToken, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id,label,token_prefix,created_at,last_used_at
+		FROM agent_tokens
+		WHERE agent_id=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+		ORDER BY created_at DESC`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []AgentToken
+	for rows.Next() {
+		var token AgentToken
+		if err := rows.Scan(&token.ID, &token.Label, &token.Prefix, &token.CreatedAt, &token.LastUsedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, token)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) RevokeAgentTokenByID(ctx context.Context, agentID, tokenID string) error {
+	command, err := s.pool.Exec(ctx, `UPDATE agent_tokens SET revoked_at=now() WHERE id=$1 AND agent_id=$2 AND revoked_at IS NULL`, tokenID, agentID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) RevokeAgentToken(ctx context.Context, token string) error {
 	hash := sha256.Sum256([]byte(token))
 	_, err := s.pool.Exec(ctx, `UPDATE agent_tokens SET revoked_at=now() WHERE token_hash=$1 AND revoked_at IS NULL`, hash[:])
@@ -331,6 +376,54 @@ func (s *Store) ListConnections(ctx context.Context) ([]Connection, error) {
 		result = append(result, c)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) ConnectionsForAgent(ctx context.Context, agentID string) ([]Connection, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id,c.slug,x.slug,x.name,c.name,x.kind,coalesce(x.endpoint_url,''),x.health_path,c.auth_method,coalesce(c.auth_name,''),c.status,
+		       c.last_checked_at,coalesce(c.last_error,''),count(DISTINCT t.id),count(DISTINCT g.tool_id),(ac.agent_id IS NOT NULL)
+		FROM connections c JOIN connectors x ON x.id=c.connector_id
+		LEFT JOIN tools t ON t.connection_id=c.id AND t.enabled
+		LEFT JOIN grants g ON g.tool_id=t.id AND g.agent_id=$1
+		LEFT JOIN agent_connections ac ON ac.connection_id=c.id AND ac.agent_id=$1
+		GROUP BY c.id,x.id,ac.agent_id ORDER BY c.name`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Connection
+	for rows.Next() {
+		var c Connection
+		if err := rows.Scan(&c.ID, &c.Slug, &c.ConnectorSlug, &c.ConnectorName, &c.Name, &c.Kind, &c.EndpointURL, &c.HealthPath, &c.AuthMethod, &c.AuthName, &c.Status, &c.LastCheckedAt, &c.LastError, &c.ToolCount, &c.GrantedCount, &c.Assigned); err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SetAgentConnection(ctx context.Context, agentID, connectionID string, enabled bool) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if enabled {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_connections(agent_id,connection_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, agentID, connectionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO grants(agent_id,tool_id) SELECT $1,id FROM tools WHERE connection_id=$2 AND enabled ON CONFLICT DO NOTHING`, agentID, connectionID); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `DELETE FROM agent_connections WHERE agent_id=$1 AND connection_id=$2`, agentID, connectionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM grants USING tools WHERE grants.agent_id=$1 AND grants.tool_id=tools.id AND tools.connection_id=$2`, agentID, connectionID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CreateConnection(ctx context.Context, kind, connectorName, connectorSlug, endpointURL, healthPath, connectionName, connectionSlug, authMethod, authName, secret string, oauth *OAuthConfig) (string, error) {
@@ -616,15 +709,15 @@ func (s *Store) ReconcileTools(ctx context.Context, connection Connection, tools
 		return err
 	}
 	for _, tool := range tools {
-		schemaHash := sha256.Sum256([]byte(string(tool.InputSchema) + string(tool.OutputSchema) + string(tool.Annotations)))
-		exposed := connection.Slug + "__" + sanitizeTool(tool.UpstreamName)
+		schemaHash := sha256.Sum256([]byte(string(tool.InputSchema) + string(tool.OutputSchema) + string(tool.Annotations) + string(tool.Icons)))
+		exposed := exposedToolName(connection.Slug, tool.UpstreamName)
 		_, err := tx.Exec(ctx, `
-			INSERT INTO tools(connection_id,upstream_name,exposed_name,title,description,input_schema,output_schema,annotations,schema_hash,enabled,last_seen_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,now())
+			INSERT INTO tools(connection_id,upstream_name,exposed_name,title,description,input_schema,output_schema,annotations,icons,schema_hash,enabled,last_seen_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,now())
 			ON CONFLICT (connection_id,upstream_name) DO UPDATE SET exposed_name=excluded.exposed_name,title=excluded.title,
 			 description=excluded.description,input_schema=excluded.input_schema,output_schema=excluded.output_schema,
-			 annotations=excluded.annotations,schema_hash=excluded.schema_hash,enabled=true,last_seen_at=now()`,
-			connection.ID, tool.UpstreamName, exposed, nullable(tool.Title), tool.Description, tool.InputSchema, nullableJSON(tool.OutputSchema), nullableJSON(tool.Annotations), schemaHash[:])
+			 annotations=excluded.annotations,icons=excluded.icons,schema_hash=excluded.schema_hash,enabled=true,last_seen_at=now()`,
+			connection.ID, tool.UpstreamName, exposed, nullable(tool.Title), tool.Description, tool.InputSchema, nullableJSON(tool.OutputSchema), nullableJSON(tool.Annotations), nullableJSON(tool.Icons), schemaHash[:])
 		if err != nil {
 			return err
 		}
@@ -642,7 +735,7 @@ func (s *Store) ReconcileTools(ctx context.Context, connection Connection, tools
 func (s *Store) ToolsForAgent(ctx context.Context, agentID string) ([]Tool, error) {
 	return s.queryTools(ctx, `
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
-		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,true
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),coalesce(t.icons,'null'::jsonb),t.enabled,true
 		FROM grants g JOIN tools t ON t.id=g.tool_id JOIN connections c ON c.id=t.connection_id
 		WHERE g.agent_id=$1 AND t.enabled AND c.status <> 'disabled' ORDER BY t.exposed_name`, agentID)
 }
@@ -650,7 +743,7 @@ func (s *Store) ToolsForAgent(ctx context.Context, agentID string) ([]Tool, erro
 func (s *Store) ToolsForGrantPage(ctx context.Context, agentID string) ([]Tool, error) {
 	return s.queryTools(ctx, `
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
-		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,(g.agent_id IS NOT NULL)
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),coalesce(t.icons,'null'::jsonb),t.enabled,(g.agent_id IS NOT NULL)
 		FROM tools t JOIN connections c ON c.id=t.connection_id LEFT JOIN grants g ON g.tool_id=t.id AND g.agent_id=$1
 		WHERE t.enabled ORDER BY c.name,t.exposed_name`, agentID)
 }
@@ -664,7 +757,7 @@ func (s *Store) SearchTools(ctx context.Context, query, kind, connectionID strin
 	}
 	tools, err := s.queryTools(ctx, `
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
-		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,false
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),coalesce(t.icons,'null'::jsonb),t.enabled,false
 		FROM tools t JOIN connections c ON c.id=t.connection_id WHERE `+filter+`
 		ORDER BY c.name,t.exposed_name LIMIT $4 OFFSET $5`, query, kind, connectionID, limit, offset)
 	return tools, total, err
@@ -681,7 +774,7 @@ func (s *Store) SearchToolsForAgentGrant(ctx context.Context, agentID, query, ki
 	}
 	tools, err := s.queryTools(ctx, `
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
-		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,(g.agent_id IS NOT NULL)
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),coalesce(t.icons,'null'::jsonb),t.enabled,(g.agent_id IS NOT NULL)
 		FROM tools t JOIN connections c ON c.id=t.connection_id LEFT JOIN grants g ON g.tool_id=t.id AND g.agent_id=$1
 		WHERE `+filter+` ORDER BY c.name,t.exposed_name LIMIT $5 OFFSET $6`, agentID, query, kind, connectionID, limit, offset)
 	return tools, total, err
@@ -696,7 +789,7 @@ func (s *Store) queryTools(ctx context.Context, query string, args ...any) ([]To
 	var result []Tool
 	for rows.Next() {
 		var t Tool
-		if err := rows.Scan(&t.ID, &t.ConnectionID, &t.ConnectionName, &t.Kind, &t.UpstreamName, &t.ExposedName, &t.Title, &t.Description, &t.InputSchema, &t.OutputSchema, &t.Annotations, &t.Enabled, &t.Granted); err != nil {
+		if err := rows.Scan(&t.ID, &t.ConnectionID, &t.ConnectionName, &t.Kind, &t.UpstreamName, &t.ExposedName, &t.Title, &t.Description, &t.InputSchema, &t.OutputSchema, &t.Annotations, &t.Icons, &t.Enabled, &t.Granted); err != nil {
 			return nil, err
 		}
 		result = append(result, t)
@@ -710,13 +803,13 @@ func (s *Store) ResolveGrantedTool(ctx context.Context, agentID, exposedName str
 	var ciphertext, nonce []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
-		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,true,
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),coalesce(t.icons,'null'::jsonb),t.enabled,true,
 		       c.id,c.slug,x.slug,x.name,c.name,x.kind,coalesce(x.endpoint_url,''),x.health_path,c.auth_method,coalesce(c.auth_name,''),c.status,c.last_checked_at,coalesce(c.last_error,''),
 		       coalesce(k.ciphertext,decode('','hex')),coalesce(k.nonce,decode('','hex'))
 		FROM grants g JOIN tools t ON t.id=g.tool_id JOIN connections c ON c.id=t.connection_id
 		JOIN connectors x ON x.id=c.connector_id LEFT JOIN connection_credentials k ON k.connection_id=c.id
 		WHERE g.agent_id=$1 AND t.exposed_name=$2 AND t.enabled AND c.status <> 'disabled'`, agentID, exposedName).Scan(
-		&t.ID, &t.ConnectionID, &t.ConnectionName, &t.Kind, &t.UpstreamName, &t.ExposedName, &t.Title, &t.Description, &t.InputSchema, &t.OutputSchema, &t.Annotations, &t.Enabled, &t.Granted,
+		&t.ID, &t.ConnectionID, &t.ConnectionName, &t.Kind, &t.UpstreamName, &t.ExposedName, &t.Title, &t.Description, &t.InputSchema, &t.OutputSchema, &t.Annotations, &t.Icons, &t.Enabled, &t.Granted,
 		&c.ID, &c.Slug, &c.ConnectorSlug, &c.ConnectorName, &c.Name, &c.Kind, &c.EndpointURL, &c.HealthPath, &c.AuthMethod, &c.AuthName, &c.Status, &c.LastCheckedAt, &c.LastError, &ciphertext, &nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tool{}, Connection{}, Credential{}, ErrNotFound
@@ -740,7 +833,7 @@ func (s *Store) ResolveGrantedTool(ctx context.Context, agentID, exposedName str
 func (s *Store) ListTools(ctx context.Context) ([]Tool, error) {
 	return s.queryTools(ctx, `
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
-		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,false
+		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),coalesce(t.icons,'null'::jsonb),t.enabled,false
 		FROM tools t JOIN connections c ON c.id=t.connection_id
 		WHERE t.enabled ORDER BY c.name,t.exposed_name`)
 }
@@ -780,7 +873,7 @@ func (s *Store) EnsureCommandTool(ctx context.Context, connectionID, name, title
 		VALUES ($1,'command',$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (connection_id,upstream_name) DO UPDATE SET exposed_name=excluded.exposed_name,title=excluded.title,
 		description=excluded.description,input_schema=excluded.input_schema,schema_hash=excluded.schema_hash,enabled=true,last_seen_at=now()
-		RETURNING id`, connectionID, name, connection.Slug+"__"+sanitizeTool(name), nullable(title), description, inputSchema, hash[:]).Scan(&toolID)
+		RETURNING id`, connectionID, name, exposedToolName(connection.Slug, name), nullable(title), description, inputSchema, hash[:]).Scan(&toolID)
 	if err != nil {
 		return err
 	}
@@ -814,7 +907,7 @@ func (s *Store) createDeclaredTool(ctx context.Context, connectionID, kind, name
 	defer tx.Rollback(ctx)
 	var toolID string
 	err = tx.QueryRow(ctx, `INSERT INTO tools(connection_id,kind,upstream_name,exposed_name,title,description,input_schema,schema_hash)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, connectionID, kind, name, connection.Slug+"__"+sanitizeTool(name), nullable(title), description, inputSchema, hash[:]).Scan(&toolID)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, connectionID, kind, name, exposedToolName(connection.Slug, name), nullable(title), description, inputSchema, hash[:]).Scan(&toolID)
 	if err != nil {
 		return err
 	}
@@ -1026,6 +1119,15 @@ func sanitizeTool(value string) string {
 		}
 	}
 	return b.String()
+}
+func exposedToolName(connectionSlug, upstream string) string {
+	name := connectionSlug + "__" + sanitizeTool(upstream)
+	if len(name) <= 128 {
+		return name
+	}
+	hash := sha256.Sum256([]byte(name))
+	suffix := "_" + hex.EncodeToString(hash[:4])
+	return name[:128-len(suffix)] + suffix
 }
 func HashForDisplay(value []byte) string { return hex.EncodeToString(value)[:12] }
 func nullable(v string) any {

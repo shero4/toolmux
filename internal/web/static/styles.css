@@ -135,6 +135,54 @@ main {
   overflow: hidden;
   margin-bottom: 40px;
 }
+.setup-flow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.setup-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  color: inherit;
+  text-decoration: none;
+}
+.setup-step:hover {
+  border-color: color-mix(in srgb, var(--text) 35%, var(--line));
+}
+.setup-step > span {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 800;
+}
+.setup-step div {
+  min-width: 0;
+  flex: 1;
+}
+.setup-step strong {
+  display: block;
+  line-height: 1.3;
+}
+.setup-step p,
+.section-heading p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+.setup-step b {
+  color: var(--muted);
+}
 .metrics div {
   background: var(--surface);
   padding: 24px;
@@ -437,6 +485,35 @@ textarea:focus {
   font-size: 12px;
   font-weight: 700;
 }
+.agent-setup-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 24px;
+  margin-bottom: 40px;
+}
+.agent-setup-grid .form-panel h2 {
+  margin-bottom: 0;
+}
+.inline-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.inline-form label {
+  margin: 0;
+}
+.inline-form input {
+  margin: 0;
+}
+.access-heading {
+  margin-top: 4px;
+}
+.connection-access {
+  max-height: 320px;
+  overflow: auto;
+}
 .tool-list {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -592,6 +669,9 @@ summary {
     grid-template-columns: 1fr;
     gap: 40px;
   }
+  .agent-setup-grid {
+    grid-template-columns: 1fr;
+  }
 }
 @media (max-width: 760px) {
   .topbar {
@@ -635,6 +715,9 @@ summary {
   .metrics {
     grid-template-columns: 1fr;
   }
+  .setup-flow {
+    grid-template-columns: 1fr;
+  }
   .split {
     grid-template-columns: 1fr;
     gap: 32px;
@@ -667,6 +750,9 @@ summary {
   }
   .form-panel {
     padding: 18px;
+  }
+  .inline-form {
+    grid-template-columns: 1fr;
   }
   .metrics div {
     padding: 20px;

@@ -30,19 +30,26 @@ func (c *Client) DiscoverStdio(ctx context.Context, spec store.MCPStdioSpec, cre
 		if len(tool.InputSchema) == 0 {
 			tool.InputSchema = json.RawMessage(`{"type":"object"}`)
 		}
-		tools = append(tools, store.Tool{UpstreamName: tool.Name, Title: tool.Title, Description: tool.Description, InputSchema: tool.InputSchema, OutputSchema: tool.OutputSchema, Annotations: tool.Annotations})
+		tools = append(tools, store.Tool{UpstreamName: tool.Name, Title: tool.Title, Description: tool.Description, InputSchema: tool.InputSchema, OutputSchema: tool.OutputSchema, Annotations: tool.Annotations, Icons: tool.Icons})
 	}
 	return tools, nil
 }
 
-func (c *Client) CallStdio(ctx context.Context, spec store.MCPStdioSpec, credential store.Credential, tool string, arguments json.RawMessage) (json.RawMessage, error) {
+func (c *Client) CallStdio(ctx context.Context, spec store.MCPStdioSpec, credential store.Credential, tool string, call store.ToolCall) (json.RawMessage, error) {
 	session, err := c.connectStdio(ctx, spec, credential)
 	if err != nil {
 		return nil, err
 	}
 	defer session.close()
 	var result json.RawMessage
-	if err := session.call("tools/call", map[string]any{"name": tool, "arguments": json.RawMessage(arguments)}, &result); err != nil {
+	params := map[string]any{"name": tool, "arguments": json.RawMessage(call.Arguments)}
+	if len(call.InputResponses) > 0 {
+		params["inputResponses"] = call.InputResponses
+	}
+	if len(call.RequestState) > 0 {
+		params["requestState"] = call.RequestState
+	}
+	if err := session.call("tools/call", params, &result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -55,9 +62,51 @@ type stdioSession struct {
 	decode *json.Decoder
 	encode *json.Encoder
 	stderr bytes.Buffer
+	modern bool
 }
 
 func (c *Client) connectStdio(ctx context.Context, spec store.MCPStdioSpec, credential store.Credential) (*stdioSession, error) {
+	probeCtx, cancelProbe := context.WithTimeout(ctx, 2*time.Second)
+	probe, err := c.startStdio(probeCtx, spec, credential)
+	modern := false
+	if err == nil {
+		probe.modern = true
+		var discovery json.RawMessage
+		modern = probe.call("server/discover", map[string]any{}, &discovery) == nil
+		probe.close()
+	}
+	cancelProbe()
+	session, err := c.startStdio(ctx, spec, credential)
+	if err != nil {
+		return nil, err
+	}
+	if modern {
+		session.modern = true
+		return session, nil
+	}
+	var initialized struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := session.call("initialize", map[string]any{
+		"protocolVersion": legacyProtocol,
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]string{"name": "toolmux", "version": "0.2.0"},
+	}, &initialized); err != nil {
+		session.close()
+		return nil, err
+	}
+	if initialized.ProtocolVersion == "" {
+		session.close()
+		return nil, errors.New("upstream returned no protocol version")
+	}
+	if err := session.encode.Encode(rpcRequest{JSONRPC: "2.0", Method: "notifications/initialized", Params: map[string]any{}}); err != nil {
+		session.close()
+		return nil, err
+	}
+	return session, nil
+}
+
+func (c *Client) startStdio(ctx context.Context, spec store.MCPStdioSpec, credential store.Credential) (*stdioSession, error) {
 	var args []string
 	if err := json.Unmarshal(spec.Args, &args); err != nil {
 		return nil, fmt.Errorf("decode MCP command arguments: %w", err)
@@ -78,29 +127,13 @@ func (c *Client) connectStdio(ctx context.Context, spec store.MCPStdioSpec, cred
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start MCP command: %w", err)
 	}
-	var initialized struct {
-		ProtocolVersion string `json:"protocolVersion"`
-	}
-	if err := session.call("initialize", map[string]any{
-		"protocolVersion": "2025-11-25",
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]string{"name": "toolmux", "version": "0.1.0"},
-	}, &initialized); err != nil {
-		session.close()
-		return nil, err
-	}
-	if initialized.ProtocolVersion == "" {
-		session.close()
-		return nil, errors.New("upstream returned no protocol version")
-	}
-	if err := session.encode.Encode(rpcRequest{JSONRPC: "2.0", Method: "notifications/initialized", Params: map[string]any{}}); err != nil {
-		session.close()
-		return nil, err
-	}
 	return session, nil
 }
 
 func (s *stdioSession) call(method string, params, result any) error {
+	if s.modern {
+		params = modernParams(params)
+	}
 	id := s.client.ids.Add(1)
 	if err := s.encode.Encode(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
 		return fmt.Errorf("write upstream %s: %w", method, err)

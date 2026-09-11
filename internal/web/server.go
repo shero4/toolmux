@@ -47,12 +47,14 @@ type pageData struct {
 	Scanned                                bool
 	Setup                                  setupGuide
 	Agent                                  store.Agent
+	AgentTokens                            []store.AgentToken
 	Connections                            []store.Connection
 	ConnectionOptions                      []store.Connection
 	Tools                                  []store.Tool
 	Events                                 []store.AuditEvent
 	Hermes                                 importer.Inventory
 	AgentCount, ConnectionCount, ToolCount int
+	ConnectedCount, AttentionCount         int
 	Pager                                  pager
 }
 
@@ -140,10 +142,11 @@ func runtimeLabel(value string) string {
 	}
 }
 
-func (s *Server) Handler(mcpHandler http.Handler) http.Handler {
+func (s *Server) Handler(mcpHandler, adminHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServer(http.FS(assets)))
 	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/admin/mcp", adminHandler)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
@@ -164,6 +167,9 @@ func (s *Server) Handler(mcpHandler http.Handler) http.Handler {
 	mux.HandleFunc("POST /agents", s.createAgent)
 	mux.HandleFunc("GET /agents/{id}", s.agentAccess)
 	mux.HandleFunc("POST /agents/{id}/grants", s.saveGrants)
+	mux.HandleFunc("POST /agents/{id}/tokens", s.issueAgentToken)
+	mux.HandleFunc("POST /agents/{id}/tokens/{tokenID}/revoke", s.revokeAgentToken)
+	mux.HandleFunc("POST /agents/{id}/connections/{connectionID}", s.setAgentConnection)
 	mux.HandleFunc("POST /agents/{id}/disable", s.disableAgent)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
 	mux.HandleFunc("GET /activity", s.activity)
@@ -177,11 +183,19 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, _ := s.store.ListConnections(r.Context())
+	connected, attention := 0, 0
+	for _, item := range items {
+		if item.Status == "connected" {
+			connected++
+		} else {
+			attention++
+		}
+	}
 	if len(items) > 6 {
 		items = items[:6]
 	}
 	events, _ := s.store.ListAudit(r.Context(), 8)
-	s.render(w, pageData{Page: "dashboard", Title: "Overview", AgentCount: agents, ConnectionCount: connections, ToolCount: tools, Connections: items, Events: events})
+	s.render(w, pageData{Page: "dashboard", Title: "Setup", AgentCount: agents, ConnectionCount: connections, ToolCount: tools, ConnectedCount: connected, AttentionCount: attention, Connections: items, Events: events})
 }
 func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
 	items, err := s.store.ListConnections(r.Context())
@@ -609,7 +623,12 @@ func (s *Server) agentAccess(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	connections, err := s.store.ListConnections(r.Context())
+	connections, err := s.store.ConnectionsForAgent(r.Context(), agent.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	tokens, err := s.store.ListAgentTokens(r.Context(), agent.ID)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -632,7 +651,43 @@ func (s *Server) agentAccess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	returnURL := r.URL.RequestURI()
-	s.render(w, pageData{Page: "agent-access", Title: "Agent access", Agent: agent, Tools: tools, ConnectionOptions: connections, Query: query, KindFilter: kind, ConnectionFilter: connectionID, Pager: pagination, ReturnURL: returnURL, Notice: r.URL.Query().Get("notice")})
+	data := pageData{Page: "agent-access", Title: "Agent access", Agent: agent, AgentTokens: tokens, Tools: tools, ConnectionOptions: connections, Query: query, KindFilter: kind, ConnectionFilter: connectionID, Pager: pagination, ReturnURL: returnURL, Token: r.URL.Query().Get("token"), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")}
+	if data.Token != "" {
+		data.Setup = s.setupGuide(agent, data.Token)
+	}
+	s.render(w, data)
+}
+
+func (s *Server) issueAgentToken(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirectError(w, r, "/agents/"+id, "Invalid form")
+		return
+	}
+	label := strings.TrimSpace(r.FormValue("label"))
+	if label == "" {
+		label = "runtime"
+	}
+	if len(label) > 80 {
+		s.redirectError(w, r, "/agents/"+id, "Token label is too long")
+		return
+	}
+	token, err := s.store.IssueAgentToken(r.Context(), id, label)
+	if err != nil {
+		s.redirectError(w, r, "/agents/"+id, "Could not issue token")
+		return
+	}
+	target := "/agents/" + id + "?notice=" + url.QueryEscape("Token issued. Copy it now; it will not be shown again.") + "&token=" + url.QueryEscape(token)
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func (s *Server) revokeAgentToken(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.store.RevokeAgentTokenByID(r.Context(), id, r.PathValue("tokenID")); err != nil {
+		s.redirectError(w, r, "/agents/"+id, "Could not revoke token")
+		return
+	}
+	http.Redirect(w, r, "/agents/"+id+"?notice="+url.QueryEscape("Token revoked."), http.StatusSeeOther)
 }
 func (s *Server) saveGrants(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -650,6 +705,24 @@ func (s *Server) saveGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	target += map[bool]string{true: "&", false: "?"}[strings.Contains(target, "?")] + "notice=" + url.QueryEscape("Access updated for this page.")
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func (s *Server) setAgentConnection(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirectError(w, r, "/agents/"+id, "Invalid form")
+		return
+	}
+	enabled := r.FormValue("enabled") == "true"
+	if err := s.store.SetAgentConnection(r.Context(), id, r.PathValue("connectionID"), enabled); err != nil {
+		s.redirectError(w, r, "/agents/"+id, "Could not update connection access")
+		return
+	}
+	message := "Connection access removed."
+	if enabled {
+		message = "Connection assigned. Existing and newly discovered tools will stay available to this agent."
+	}
+	http.Redirect(w, r, "/agents/"+id+"?notice="+url.QueryEscape(message), http.StatusSeeOther)
 }
 
 func (s *Server) disableAgent(w http.ResponseWriter, r *http.Request) {
