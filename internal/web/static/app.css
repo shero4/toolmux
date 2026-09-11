@@ -166,6 +166,67 @@
   color: var(--muted);
   font-size: 13px;
 }
+.js .sticky-actions {
+  display: none;
+}
+.tool .grant-box {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border: 2px solid color-mix(in srgb, var(--muted) 65%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: #fff;
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.tool .grant-box::after {
+  content: "✓";
+  opacity: 0;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  transform: scale(0.65);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.tool .grant-input:checked + .grant-box {
+  border-color: var(--text);
+  background: var(--text);
+}
+.tool .grant-input:checked + .grant-box::after {
+  opacity: 1;
+  transform: scale(1);
+}
+.tool .grant-input:focus-visible + .grant-box {
+  outline: 3px solid color-mix(in srgb, var(--text) 25%, transparent);
+  outline-offset: 3px;
+}
+.tool .grant-input:disabled + .grant-box {
+  opacity: 0.65;
+}
+.tool.is-granted {
+  background: color-mix(in srgb, var(--surface) 92%, var(--text));
+}
+.tool-copy {
+  flex: 1;
+}
+.grant-state {
+  flex: none;
+  align-self: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 650;
+}
+.tool.is-granted .grant-state {
+  color: var(--good);
+}
+.tool.is-saving .grant-state,
+.grant-state.is-error {
+  color: var(--bad);
+}
 @media (max-width: 760px) {
   .import-summary {
     align-items: flex-start;

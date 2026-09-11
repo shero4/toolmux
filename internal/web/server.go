@@ -695,8 +695,17 @@ func (s *Server) saveGrants(w http.ResponseWriter, r *http.Request) {
 		s.redirectError(w, r, "/agents/"+id, "Invalid form")
 		return
 	}
+	async := r.Header.Get("X-Toolmux-Async") == "true"
 	if err := s.store.SetVisibleGrants(r.Context(), id, r.Form["visible_tool_id"], r.Form["tool_id"]); err != nil {
+		if async {
+			http.Error(w, "Could not save access", http.StatusInternalServerError)
+			return
+		}
 		s.redirectError(w, r, "/agents/"+id, "Could not save access")
+		return
+	}
+	if async {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	target := r.FormValue("return_url")
