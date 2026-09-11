@@ -41,6 +41,13 @@ func (f *fakeRepository) SaveCredential(_ context.Context, _ string, credential 
 	f.credential = credential
 	return nil
 }
+func (f *fakeRepository) SaveOAuthClient(_ context.Context, _ string, clientID, clientSecret, tokenAuthMethod, redirectURI string) error {
+	f.config.ClientID = clientID
+	f.config.TokenAuthMethod = tokenAuthMethod
+	f.config.RedirectURI = redirectURI
+	f.credential.ClientSecret = clientSecret
+	return nil
+}
 
 func TestAuthorizationAndRefresh(t *testing.T) {
 	var grants []string
@@ -83,5 +90,38 @@ func TestAuthorizationAndRefresh(t *testing.T) {
 	}
 	if len(grants) != 2 || grants[0] != "authorization_code" || grants[1] != "refresh_token" {
 		t.Fatalf("unexpected grants %v", grants)
+	}
+}
+
+func TestStartRegistersPublicClientForToolmuxCallback(t *testing.T) {
+	registration := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			RedirectURIs []string `json:"redirect_uris"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if len(request.RedirectURIs) != 1 || request.RedirectURIs[0] != "http://localhost:8080/oauth/callback" {
+			t.Fatalf("unexpected redirect URIs: %v", request.RedirectURIs)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"client_id": "toolmux-client", "token_endpoint_auth_method": "none"})
+	}))
+	defer registration.Close()
+
+	repo := &fakeRepository{
+		config:     store.OAuthConfig{AuthorizationURL: "https://identity.example/authorize", TokenURL: "https://identity.example/token", RegistrationURL: registration.URL, RedirectURI: "http://localhost:9000/callback"},
+		connection: store.Connection{ID: "connection", AuthMethod: "oauth2"},
+	}
+	manager := New(repo, "http://localhost:8080")
+	target, err := manager.Start(context.Background(), "connection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("client_id") != "toolmux-client" || repo.config.TokenAuthMethod != "none" {
+		t.Fatalf("registered client was not used: %s", target)
 	}
 }

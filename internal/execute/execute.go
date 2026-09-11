@@ -34,6 +34,13 @@ func New(store *store.Store, mcpClient *mcp.Client) *Router {
 func (r *Router) Call(ctx context.Context, tool store.Tool, connection store.Connection, credential store.Credential, arguments json.RawMessage) (json.RawMessage, error) {
 	switch tool.Kind {
 	case "mcp":
+		if connection.Kind == "mcp_stdio" {
+			spec, err := r.store.GetMCPStdioSpec(ctx, connection.ID)
+			if err != nil {
+				return nil, err
+			}
+			return r.mcp.CallStdio(ctx, spec, credential, tool.UpstreamName, arguments)
+		}
 		return r.mcp.Call(ctx, connection, credential, tool.UpstreamName, arguments)
 	case "http":
 		return r.callHTTP(ctx, tool, connection, credential, arguments)
@@ -48,6 +55,19 @@ func (r *Router) Check(ctx context.Context, connection store.Connection, credent
 	switch connection.Kind {
 	case "mcp_http":
 		tools, err := r.mcp.Discover(ctx, connection, credential)
+		if err != nil {
+			return store.Check{}, err
+		}
+		if err := r.store.ReconcileTools(ctx, connection, tools); err != nil {
+			return store.Check{Status: "degraded", Reachable: true, ProtocolOK: true, Authorized: true, Detail: "Tool catalog could not be saved."}, nil
+		}
+		return store.Check{Status: "connected", Reachable: true, ProtocolOK: true, Authorized: true, CapabilityOK: true, ToolCount: len(tools)}, nil
+	case "mcp_stdio":
+		spec, err := r.store.GetMCPStdioSpec(ctx, connection.ID)
+		if err != nil {
+			return store.Check{}, err
+		}
+		tools, err := r.mcp.DiscoverStdio(ctx, spec, credential)
 		if err != nil {
 			return store.Check{}, err
 		}

@@ -71,6 +71,7 @@ func (s *Scanner) Find(ctx context.Context, id string) (Candidate, bool) {
 func (s *Scanner) scanHome(home, environment string, seen map[string]Candidate) {
 	home = filepath.Clean(home)
 	s.scanHermes(filepath.Join(home, ".hermes"), environment, seen)
+	s.scanHermes(filepath.Join(home, "AppData", "Local", "hermes"), environment, seen)
 	s.scanOpenClaw(filepath.Join(home, ".openclaw"), "default", environment, seen)
 	matches, _ := filepath.Glob(filepath.Join(home, ".openclaw-*"))
 	for _, state := range matches {

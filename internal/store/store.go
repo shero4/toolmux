@@ -61,12 +61,13 @@ type CommandToolSpec struct {
 }
 
 type Credential struct {
-	BearerToken  string     `json:"bearer_token,omitempty"`
-	ClientSecret string     `json:"client_secret,omitempty"`
-	AccessToken  string     `json:"access_token,omitempty"`
-	RefreshToken string     `json:"refresh_token,omitempty"`
-	TokenType    string     `json:"token_type,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	BearerToken  string            `json:"bearer_token,omitempty"`
+	ClientSecret string            `json:"client_secret,omitempty"`
+	AccessToken  string            `json:"access_token,omitempty"`
+	RefreshToken string            `json:"refresh_token,omitempty"`
+	TokenType    string            `json:"token_type,omitempty"`
+	ExpiresAt    *time.Time        `json:"expires_at,omitempty"`
+	Environment  map[string]string `json:"environment,omitempty"`
 }
 
 func (c Credential) Bearer() string {
@@ -79,9 +80,25 @@ func (c Credential) Bearer() string {
 type OAuthConfig struct {
 	AuthorizationURL string
 	TokenURL         string
+	RegistrationURL  string
 	ClientID         string
 	Scopes           string
 	TokenAuthMethod  string
+	RedirectURI      string
+}
+
+type MCPStdioSpec struct {
+	Executable, WorkingDirectory string
+	Args                         json.RawMessage
+}
+
+type ImportedConnection struct {
+	SourceKey, Kind, ConnectorName, ConnectorSlug string
+	EndpointURL, ConnectionName, ConnectionSlug   string
+	AuthMethod, AuthName, AgentID                 string
+	Credential                                    Credential
+	OAuth                                         *OAuthConfig
+	Stdio                                         *MCPStdioSpec
 }
 
 type AuditEvent struct {
@@ -184,14 +201,55 @@ func (s *Store) CreateDiscoveredAgent(ctx context.Context, name, slug, sourceKey
 	return s.createAgent(ctx, name, slug, sourceKey, runtime, profile, environment, configPath)
 }
 
-func (s *Store) createAgent(ctx context.Context, name, slug, sourceKey, runtime, profile, environment, configPath string) (Agent, string, error) {
+func (s *Store) IssueAgentToken(ctx context.Context, agentID, label string) (string, error) {
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		return Agent{}, "", err
+		return "", err
 	}
 	token := "tmx_" + base64.RawURLEncoding.EncodeToString(tokenBytes)
 	hash := sha256.Sum256([]byte(token))
-	prefix := token[:12]
+	if label == "" {
+		label = "default"
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO agent_tokens(agent_id,label,token_prefix,token_hash) VALUES ($1,$2,$3,$4)`, agentID, label, token[:12], hash[:])
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *Store) RevokeAgentToken(ctx context.Context, token string) error {
+	hash := sha256.Sum256([]byte(token))
+	_, err := s.pool.Exec(ctx, `UPDATE agent_tokens SET revoked_at=now() WHERE token_hash=$1 AND revoked_at IS NULL`, hash[:])
+	return err
+}
+
+func (s *Store) AgentTokenActive(ctx context.Context, agentID, token string) (bool, error) {
+	hash := sha256.Sum256([]byte(token))
+	var active bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM agent_tokens WHERE agent_id=$1 AND token_hash=$2 AND revoked_at IS NULL
+		AND (expires_at IS NULL OR expires_at > now()))`, agentID, hash[:]).Scan(&active)
+	return active, err
+}
+
+func (s *Store) EnsureDiscoveredAgent(ctx context.Context, name, slug, sourceKey, runtime, profile, environment, configPath string) (Agent, string, bool, error) {
+	var agent Agent
+	err := s.pool.QueryRow(ctx, `
+		SELECT a.id,a.slug,a.name,a.status,i.source_key,i.runtime,i.profile,i.environment,i.config_path
+		FROM agent_installations i JOIN agents a ON a.id=i.agent_id WHERE i.source_key=$1`, sourceKey).Scan(
+		&agent.ID, &agent.Slug, &agent.Name, &agent.Status, &agent.SourceKey, &agent.Runtime, &agent.Profile, &agent.Environment, &agent.ConfigPath)
+	if err == nil {
+		return agent, "", false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Agent{}, "", false, err
+	}
+	agent, token, err := s.createAgent(ctx, name, slug, sourceKey, runtime, profile, environment, configPath)
+	return agent, token, err == nil, err
+}
+
+func (s *Store) createAgent(ctx context.Context, name, slug, sourceKey, runtime, profile, environment, configPath string) (Agent, string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Agent{}, "", err
@@ -209,7 +267,13 @@ func (s *Store) createAgent(ctx context.Context, name, slug, sourceKey, runtime,
 		}
 		a.SourceKey, a.Runtime, a.Profile, a.Environment, a.ConfigPath = sourceKey, runtime, profile, environment, configPath
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO agent_tokens(agent_id, token_prefix, token_hash) VALUES ($1,$2,$3)`, a.ID, prefix, hash[:])
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return Agent{}, "", err
+	}
+	token := "tmx_" + base64.RawURLEncoding.EncodeToString(tokenBytes)
+	hash := sha256.Sum256([]byte(token))
+	_, err = tx.Exec(ctx, `INSERT INTO agent_tokens(agent_id, token_prefix, token_hash) VALUES ($1,$2,$3)`, a.ID, token[:12], hash[:])
 	if err != nil {
 		return Agent{}, "", err
 	}
@@ -241,7 +305,8 @@ func (s *Store) ListConnections(ctx context.Context) ([]Connection, error) {
 		FROM connections c JOIN connectors x ON x.id=c.connector_id
 		LEFT JOIN tools t ON t.connection_id=c.id AND t.enabled
 		LEFT JOIN grants g ON g.tool_id=t.id
-		GROUP BY c.id,x.id ORDER BY c.name`)
+		GROUP BY c.id,x.id
+		ORDER BY CASE c.status WHEN 'reauthorization_required' THEN 0 WHEN 'connected' THEN 2 ELSE 1 END, c.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -305,13 +370,135 @@ func (s *Store) CreateConnection(ctx context.Context, kind, connectorName, conne
 	return connectionID, nil
 }
 
+func (s *Store) ImportConnection(ctx context.Context, input ImportedConnection) (string, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx)
+
+	transport := "streamable_http"
+	if input.Kind == "mcp_stdio" {
+		transport = "stdio"
+	}
+	var connectorID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO connectors(name,slug,kind,endpoint_url,transport) VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (slug) DO UPDATE SET name=excluded.name,kind=excluded.kind,endpoint_url=excluded.endpoint_url,transport=excluded.transport
+		RETURNING id`, input.ConnectorName, input.ConnectorSlug, input.Kind, nullable(input.EndpointURL), transport).Scan(&connectorID)
+	if err != nil {
+		return "", false, err
+	}
+
+	var connectionID string
+	var created bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO connections(connector_id,name,slug,auth_method,auth_name,source_key)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (source_key) DO UPDATE SET connector_id=excluded.connector_id,name=excluded.name,auth_method=excluded.auth_method,auth_name=excluded.auth_name
+		RETURNING id,(xmax=0)`, connectorID, input.ConnectionName, input.ConnectionSlug, input.AuthMethod, nullable(input.AuthName), input.SourceKey).Scan(&connectionID, &created)
+	if err != nil {
+		return "", false, err
+	}
+
+	if hasCredential(input.Credential) {
+		payload, err := json.Marshal(input.Credential)
+		if err != nil {
+			return "", false, err
+		}
+		ciphertext, nonce, err := s.box.Seal(payload)
+		if err != nil {
+			return "", false, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO connection_credentials(connection_id,ciphertext,nonce) VALUES ($1,$2,$3)
+			ON CONFLICT (connection_id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,key_version=1,updated_at=now()`, connectionID, ciphertext, nonce); err != nil {
+			return "", false, err
+		}
+	}
+
+	if input.OAuth != nil {
+		_, err = tx.Exec(ctx, `INSERT INTO oauth_configs(connection_id,authorization_url,token_url,registration_url,client_id,scopes,token_auth_method,redirect_uri)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			ON CONFLICT (connection_id) DO UPDATE SET authorization_url=excluded.authorization_url,token_url=excluded.token_url,
+			registration_url=excluded.registration_url,client_id=excluded.client_id,scopes=excluded.scopes,
+			token_auth_method=excluded.token_auth_method,redirect_uri=excluded.redirect_uri`, connectionID, input.OAuth.AuthorizationURL, input.OAuth.TokenURL,
+			input.OAuth.RegistrationURL, nullable(input.OAuth.ClientID), input.OAuth.Scopes, input.OAuth.TokenAuthMethod, input.OAuth.RedirectURI)
+		if err != nil {
+			return "", false, err
+		}
+	}
+
+	if input.Stdio != nil {
+		_, err = tx.Exec(ctx, `INSERT INTO mcp_stdio_specs(connection_id,executable,args,working_directory) VALUES ($1,$2,$3,$4)
+			ON CONFLICT (connection_id) DO UPDATE SET executable=excluded.executable,args=excluded.args,working_directory=excluded.working_directory`,
+			connectionID, input.Stdio.Executable, input.Stdio.Args, input.Stdio.WorkingDirectory)
+		if err != nil {
+			return "", false, err
+		}
+	}
+
+	if input.AgentID != "" {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_connections(agent_id,connection_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, input.AgentID, connectionID); err != nil {
+			return "", false, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO grants(agent_id,tool_id) SELECT $1,id FROM tools WHERE connection_id=$2 AND enabled ON CONFLICT DO NOTHING`, input.AgentID, connectionID); err != nil {
+			return "", false, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", false, err
+	}
+	return connectionID, created, nil
+}
+
 func (s *Store) GetOAuthConfig(ctx context.Context, connectionID string) (OAuthConfig, error) {
 	var config OAuthConfig
-	err := s.pool.QueryRow(ctx, `SELECT authorization_url,token_url,client_id,scopes,token_auth_method FROM oauth_configs WHERE connection_id=$1`, connectionID).Scan(&config.AuthorizationURL, &config.TokenURL, &config.ClientID, &config.Scopes, &config.TokenAuthMethod)
+	err := s.pool.QueryRow(ctx, `SELECT authorization_url,token_url,registration_url,coalesce(client_id,''),scopes,token_auth_method,redirect_uri FROM oauth_configs WHERE connection_id=$1`, connectionID).Scan(
+		&config.AuthorizationURL, &config.TokenURL, &config.RegistrationURL, &config.ClientID, &config.Scopes, &config.TokenAuthMethod, &config.RedirectURI)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OAuthConfig{}, ErrNotFound
 	}
 	return config, err
+}
+
+func (s *Store) SaveOAuthClient(ctx context.Context, connectionID, clientID, clientSecret, tokenAuthMethod, redirectURI string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE oauth_configs SET client_id=$2,token_auth_method=$3,redirect_uri=$4 WHERE connection_id=$1`, connectionID, clientID, tokenAuthMethod, redirectURI); err != nil {
+		return err
+	}
+	var credential Credential
+	var ciphertext, nonce []byte
+	err = tx.QueryRow(ctx, `SELECT ciphertext,nonce FROM connection_credentials WHERE connection_id=$1`, connectionID).Scan(&ciphertext, &nonce)
+	if err == nil {
+		plaintext, err := s.box.Open(ciphertext, nonce)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(plaintext, &credential); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	credential.ClientSecret = clientSecret
+	payload, err := json.Marshal(credential)
+	if err != nil {
+		return err
+	}
+	ciphertext, nonce, err = s.box.Seal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO connection_credentials(connection_id,ciphertext,nonce) VALUES ($1,$2,$3)
+		ON CONFLICT (connection_id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,key_version=1,updated_at=now()`, connectionID, ciphertext, nonce); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) SaveCredential(ctx context.Context, connectionID string, credential Credential) error {
@@ -368,7 +555,7 @@ func (s *Store) GetConnection(ctx context.Context, id string) (Connection, Crede
 	var ciphertext, nonce []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT c.id,c.slug,x.slug,x.name,c.name,x.kind,coalesce(x.endpoint_url,''),x.health_path,c.auth_method,coalesce(c.auth_name,''),c.status,c.last_checked_at,coalesce(c.last_error,''),
-		       coalesce(k.ciphertext,'\\x'::bytea),coalesce(k.nonce,'\\x'::bytea)
+		       coalesce(k.ciphertext,decode('','hex')),coalesce(k.nonce,decode('','hex'))
 		FROM connections c JOIN connectors x ON x.id=c.connector_id
 		LEFT JOIN connection_credentials k ON k.connection_id=c.id WHERE c.id=$1`, id).Scan(
 		&c.ID, &c.Slug, &c.ConnectorSlug, &c.ConnectorName, &c.Name, &c.Kind, &c.EndpointURL, &c.HealthPath, &c.AuthMethod, &c.AuthName, &c.Status, &c.LastCheckedAt, &c.LastError, &ciphertext, &nonce)
@@ -379,7 +566,7 @@ func (s *Store) GetConnection(ctx context.Context, id string) (Connection, Crede
 		return Connection{}, Credential{}, err
 	}
 	var credential Credential
-	if c.AuthMethod != "none" {
+	if len(ciphertext) > 0 {
 		plaintext, err := s.box.Open(ciphertext, nonce)
 		if err != nil {
 			return Connection{}, Credential{}, err
@@ -431,6 +618,13 @@ func (s *Store) ReconcileTools(ctx context.Context, connection Connection, tools
 			return err
 		}
 	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO grants(agent_id,tool_id)
+		SELECT a.agent_id,t.id FROM agent_connections a JOIN tools t ON t.connection_id=a.connection_id
+		WHERE a.connection_id=$1 AND t.enabled
+		ON CONFLICT DO NOTHING`, connection.ID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -475,7 +669,7 @@ func (s *Store) ResolveGrantedTool(ctx context.Context, agentID, exposedName str
 		SELECT t.id,t.connection_id,c.name,t.kind,t.upstream_name,t.exposed_name,coalesce(t.title,''),t.description,t.input_schema,
 		       coalesce(t.output_schema,'null'::jsonb),coalesce(t.annotations,'null'::jsonb),t.enabled,true,
 		       c.id,c.slug,x.slug,x.name,c.name,x.kind,coalesce(x.endpoint_url,''),x.health_path,c.auth_method,coalesce(c.auth_name,''),c.status,c.last_checked_at,coalesce(c.last_error,''),
-		       coalesce(k.ciphertext,'\\x'::bytea),coalesce(k.nonce,'\\x'::bytea)
+		       coalesce(k.ciphertext,decode('','hex')),coalesce(k.nonce,decode('','hex'))
 		FROM grants g JOIN tools t ON t.id=g.tool_id JOIN connections c ON c.id=t.connection_id
 		JOIN connectors x ON x.id=c.connector_id LEFT JOIN connection_credentials k ON k.connection_id=c.id
 		WHERE g.agent_id=$1 AND t.exposed_name=$2 AND t.enabled AND c.status <> 'disabled'`, agentID, exposedName).Scan(
@@ -488,7 +682,7 @@ func (s *Store) ResolveGrantedTool(ctx context.Context, agentID, exposedName str
 		return Tool{}, Connection{}, Credential{}, err
 	}
 	var credential Credential
-	if c.AuthMethod != "none" {
+	if len(ciphertext) > 0 {
 		plaintext, err := s.box.Open(ciphertext, nonce)
 		if err != nil {
 			return Tool{}, Connection{}, Credential{}, err
@@ -522,6 +716,43 @@ func (s *Store) CreateCommandTool(ctx context.Context, connectionID, name, title
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, toolID, spec.Executable, nullable(spec.WorkingDirectory), spec.ArgsTemplate, spec.StdinMode, nullable(spec.CredentialEnv), spec.TimeoutMS, spec.MaxOutputBytes)
 		return err
 	})
+}
+
+func (s *Store) EnsureCommandTool(ctx context.Context, connectionID, name, title, description string, inputSchema json.RawMessage, spec CommandToolSpec) error {
+	connection, _, err := s.GetConnection(ctx, connectionID)
+	if err != nil {
+		return err
+	}
+	if connection.Kind != "command" {
+		return errors.New("tool kind does not match connection kind")
+	}
+	hash := sha256.Sum256(inputSchema)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var toolID string
+	err = tx.QueryRow(ctx, `INSERT INTO tools(connection_id,kind,upstream_name,exposed_name,title,description,input_schema,schema_hash)
+		VALUES ($1,'command',$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (connection_id,upstream_name) DO UPDATE SET exposed_name=excluded.exposed_name,title=excluded.title,
+		description=excluded.description,input_schema=excluded.input_schema,schema_hash=excluded.schema_hash,enabled=true,last_seen_at=now()
+		RETURNING id`, connectionID, name, connection.Slug+"__"+sanitizeTool(name), nullable(title), description, inputSchema, hash[:]).Scan(&toolID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO command_tool_specs(tool_id,executable,working_directory,args_template,stdin_mode,credential_env,timeout_ms,max_output_bytes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (tool_id) DO UPDATE SET executable=excluded.executable,working_directory=excluded.working_directory,
+		args_template=excluded.args_template,stdin_mode=excluded.stdin_mode,credential_env=excluded.credential_env,
+		timeout_ms=excluded.timeout_ms,max_output_bytes=excluded.max_output_bytes`, toolID, spec.Executable, nullable(spec.WorkingDirectory), spec.ArgsTemplate, spec.StdinMode, nullable(spec.CredentialEnv), spec.TimeoutMS, spec.MaxOutputBytes)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO grants(agent_id,tool_id) SELECT agent_id,$2 FROM agent_connections WHERE connection_id=$1 ON CONFLICT DO NOTHING`, connectionID, toolID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) createDeclaredTool(ctx context.Context, connectionID, kind, name, title, description string, inputSchema json.RawMessage, addSpec func(pgx.Tx, string) error) error {
@@ -566,6 +797,16 @@ func (s *Store) GetCommandToolSpec(ctx context.Context, toolID string) (CommandT
 		&spec.Executable, &spec.WorkingDirectory, &spec.ArgsTemplate, &spec.StdinMode, &spec.CredentialEnv, &spec.TimeoutMS, &spec.MaxOutputBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CommandToolSpec{}, ErrNotFound
+	}
+	return spec, err
+}
+
+func (s *Store) GetMCPStdioSpec(ctx context.Context, connectionID string) (MCPStdioSpec, error) {
+	var spec MCPStdioSpec
+	err := s.pool.QueryRow(ctx, `SELECT executable,args,working_directory FROM mcp_stdio_specs WHERE connection_id=$1`, connectionID).Scan(
+		&spec.Executable, &spec.Args, &spec.WorkingDirectory)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MCPStdioSpec{}, ErrNotFound
 	}
 	return spec, err
 }
@@ -705,6 +946,9 @@ func nullableJSON(v json.RawMessage) any {
 		return nil
 	}
 	return v
+}
+func hasCredential(credential Credential) bool {
+	return credential.BearerToken != "" || credential.ClientSecret != "" || credential.AccessToken != "" || credential.RefreshToken != "" || len(credential.Environment) > 0
 }
 func nullID(v string) any {
 	if v == "" {

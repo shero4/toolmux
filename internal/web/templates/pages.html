@@ -27,6 +27,7 @@
     {{if .Error}}<div class="error alert alert-error" role="alert">{{.Error}}</div>{{end}}
     {{if eq .Page "dashboard"}}{{template "dashboard" .}}{{end}}
     {{if eq .Page "connections"}}{{template "connections" .}}{{end}}
+    {{if eq .Page "hermes-import"}}{{template "hermes-import" .}}{{end}}
     {{if eq .Page "tools"}}{{template "tools" .}}{{end}}
     {{if eq .Page "agents"}}{{template "agents" .}}{{end}}
     {{if eq .Page "agent-access"}}{{template "agent-access" .}}{{end}}
@@ -46,7 +47,7 @@
 {{end}}
 
 {{define "connections"}}
-<div class="page-heading"><div><p class="eyebrow">Upstream services</p><h1>Connections</h1><p>Connect an MCP server, HTTP API, or installed command. Credentials stay here.</p></div></div>
+<div class="page-heading"><div><p class="eyebrow">Upstream services</p><h1>Connections</h1><p>Connect an MCP server, HTTP API, or installed command. Credentials stay here.</p></div><a class="btn btn-primary" href="/imports/hermes">Import Hermes</a></div>
 <div class="split form-split">
   <section><div class="section-heading"><h2>Configured</h2></div>{{template "connection-list" .}}</section>
   <section class="form-panel card border border-base-300 bg-base-100"><h2>Add connection</h2><form method="post" action="/connections">
@@ -72,8 +73,33 @@
 </div>
 {{end}}
 
+{{define "hermes-import"}}
+<div class="page-heading"><div><p class="eyebrow"><a href="/connections">Connections</a> / Import</p><h1>Import Hermes</h1><p>Bring each profile, MCP instance, stored authorization, and local Google Workspace identity into Toolmux.</p></div></div>
+{{if .Hermes.Profiles}}
+<form method="post" action="/imports/hermes">
+  <div class="import-summary card border border-base-300 bg-base-100">
+    <div><strong>{{len .Hermes.Profiles}} Hermes profiles found</strong><p>Toolmux will add its endpoint to each profile and keep a backup of the original configuration.</p></div>
+    <button class="btn btn-primary" type="submit">Import and connect all</button>
+  </div>
+</form>
+<div class="import-grid">
+{{range .Hermes.Profiles}}
+  <section class="form-panel card border border-base-300 bg-base-100">
+    <div class="section-heading"><div><h2>{{.Candidate.Name}}</h2><p>{{.Candidate.Environment}}</p></div><span class="badge badge-ghost">{{len .Servers}} MCPs</span></div>
+    {{if .Servers}}<div class="compact-list">{{range .Servers}}<div class="compact-row"><div><strong>{{.Name}}</strong><small>{{.Kind}}{{if .Endpoint}} · {{.Endpoint}}{{end}}</small></div>{{if .Enabled}}<span class="status status-connected">{{.Authorization}}</span>{{else}}<span class="status status-disabled">Disabled</span>{{end}}</div>{{end}}</div>{{else}}<p class="muted">No MCP servers configured.</p>{{end}}
+  </section>
+{{end}}
+</div>
+{{else}}
+<div class="empty card border border-base-300"><strong>No Hermes profiles found</strong><p>Run Toolmux on the host, or mount the host home so its configuration can be detected.</p></div>
+{{end}}
+{{if .Hermes.GWS}}
+<section class="discovery-panel"><div class="section-heading"><div><h2>Google Workspace identities</h2><p>Each local GWS command is imported as its own authorized connection.</p></div><span class="badge badge-ghost">{{len .Hermes.GWS}} found</span></div><div class="list card border border-base-300 bg-base-100">{{range .Hermes.GWS}}<div class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">CLI</span></div><p>Uses the existing local authorization.</p></div></div>{{end}}</div></section>
+{{end}}
+{{end}}
+
 {{define "connection-list"}}
-{{if .Connections}}<div class="list card border border-base-300 bg-base-100">{{range .Connections}}<article class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">{{.Kind}}</span><span class="status badge badge-outline badge-sm status-{{.Status}}">{{status .Status}}</span></div><p>{{.ConnectorName}} · {{.ToolCount}} tools · checked {{date .LastCheckedAt}}</p>{{if .LastError}}<p class="row-error">{{.LastError}}</p>{{end}}</div><div class="row-actions">{{if eq .AuthMethod "oauth2"}}<a class="btn btn-ghost btn-sm" href="/connections/{{.ID}}/authorize">Authorize</a>{{end}}<form method="post" action="/connections/{{.ID}}/check"><button class="btn btn-ghost btn-sm" type="submit">Check</button></form></div></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No connections yet</strong><p>Add a service or command to begin.</p></div>{{end}}
+{{if .Connections}}<div class="list card border border-base-300 bg-base-100">{{range .Connections}}<article class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">{{.Kind}}</span><span class="status badge badge-outline badge-sm status-{{.Status}}">{{status .Status}}</span></div><p>{{.ConnectorName}} · {{.ToolCount}} tools · checked {{date .LastCheckedAt}}</p>{{if .LastError}}<p class="row-error">{{.LastError}}</p>{{end}}{{if or (eq .AuthMethod "bearer") (eq .AuthMethod "header")}}<details class="credential-update"><summary>Replace credential</summary><form method="post" action="/connections/{{.ID}}/credential"><input type="password" name="secret" required autocomplete="off" placeholder="New credential"><button class="btn btn-primary btn-sm" type="submit">Save and check</button></form></details>{{end}}</div><div class="row-actions">{{if eq .AuthMethod "oauth2"}}<a class="btn btn-ghost btn-sm" href="/connections/{{.ID}}/authorize">{{if eq .Status "reauthorization_required"}}Authorize{{else}}Reconnect{{end}}</a>{{end}}<form method="post" action="/connections/{{.ID}}/check"><button class="btn btn-ghost btn-sm" type="submit">Check</button></form></div></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No connections yet</strong><p>Add a service or command to begin.</p></div>{{end}}
 {{end}}
 
 {{define "tools"}}

@@ -14,6 +14,7 @@ security boundary is the agent-facing MCP endpoint and its per-agent grants.
 - One Streamable HTTP endpoint at `/mcp` for every agent
 - Hashed, individually revocable agent tokens
 - Remote Streamable HTTP MCP connections with automatic tool discovery
+- Local stdio MCP processes with imported arguments and environment
 - Declarative HTTP API tools with typed input schemas and safe URL/body templates
 - Declarative CLI tools that use the host's installed binaries, environment, and
   optional working directory
@@ -22,6 +23,8 @@ security boundary is the agent-facing MCP endpoint and its per-agent grants.
 - Tool discovery with stable `connection__tool` names
 - Per-agent tool grants, enforced on discovery and invocation
 - Read-only discovery of Hermes and OpenClaw agents on the host and in WSL
+- One-click Hermes import for profiles, MCP instances, OAuth state, API keys,
+  and local `gws-*` identities
 - Encrypted upstream credentials
 - Active reachability, protocol, authorization, and capability checks
 - Append-only audit events
@@ -64,9 +67,28 @@ docker compose -f compose.yaml -f compose.discovery.yaml up --build
 ```
 
 The host home is mounted read-only. Toolmux looks for Hermes' default profile
-and named profiles below `.hermes`, plus OpenClaw agents below `.openclaw` and
-named `.openclaw-*` state directories. You can instead set
+and named profiles below its standard data directory, plus OpenClaw agents
+below `.openclaw` and named `.openclaw-*` state directories. You can instead set
 `TOOLMUX_DISCOVERY_ROOTS` to an OS path-list when running the binary directly.
+
+### Import Hermes
+
+Run Toolmux directly on the host when you want to reuse host-installed stdio
+MCPs or CLIs. On **Connections**, choose **Import Hermes**. The import is
+idempotent and:
+
+- creates one Toolmux agent for every Hermes profile;
+- keeps separate instances when the same MCP is configured in multiple profiles;
+- imports remote MCP, stdio MCP, header, bearer, and reusable OAuth state;
+- imports every installed `gws-*` identity as a separate Google Workspace
+  connection and makes those connections available to all imported profiles;
+- writes each profile's own Toolmux URL and token into its `mcp_servers` map;
+- preserves the original YAML beside it as `config.yaml.toolmux.bak`.
+
+Existing upstream MCP entries remain in place during the test period. Remove
+them after you are satisfied that calls are flowing through Toolmux. If an
+imported credential is expired, the Connections page shows **Authorize** for
+OAuth or **Replace credential** for a bearer/API key connection.
 
 ## Connect an agent
 
@@ -80,9 +102,9 @@ Authorization: Bearer <agent token>
 
 Tokens are displayed once. Toolmux stores only their SHA-256 hashes.
 
-Imported Hermes agents receive a ready-to-merge `mcp_servers` entry. Imported
-OpenClaw agents receive an exact `openclaw mcp set` command and a probe command.
-Toolmux does not silently rewrite either tool's configuration.
+Imported Hermes profiles are configured automatically by the dedicated import
+flow. The generic discovery flow remains read-only and shows setup instructions
+for Hermes and OpenClaw.
 
 For an OAuth connection, register this redirect URL with the provider:
 
@@ -92,8 +114,10 @@ http://localhost:8080/oauth/callback
 
 Use the public `TOOLMUX_BASE_URL` instead of localhost when Toolmux is behind
 TLS. Toolmux uses Authorization Code with PKCE and refreshes access tokens one
-minute before expiry. Providers that require dynamic client registration are not
-yet supported; supply a client ID and, when required, a client secret.
+minute before expiry. When an imported MCP publishes a dynamic
+client-registration endpoint, Toolmux registers its own callback client before
+starting authorization. Otherwise, supply a client ID and, when required, a
+client secret.
 
 ## Expose an HTTP API
 
@@ -118,9 +142,9 @@ Per-tool timeouts prevent accidental hangs and may be set up to one hour.
 - The service fails closed when identity, grants, or credentials cannot be read.
 - Agents never receive upstream credentials.
 - Unauthorized tools are absent from `tools/list` and rejected by `tools/call`.
-- Connection checks never invoke API operations or commands. They discover MCP
-  tools, send `HEAD` to an API health path, or verify that command executables
-  exist.
+- Connection checks discover MCP tools, send `HEAD` to an API health path, or
+  verify that a declarative command executable exists. A stdio MCP is started
+  long enough to initialize and list its tools.
 - The default deployment is one application container and one PostgreSQL
   container. There is no queue, cache, policy engine, or browser application
   runtime.
@@ -128,5 +152,7 @@ Per-tool timeouts prevent accidental hangs and may be set up to one hour.
   the production image and the interface remains server-rendered.
 - Connection health does not revoke grants. A configured agent keeps its access;
   health status explains why an upstream may currently be unavailable.
+- Import assignments are durable. Tools discovered later on an assigned
+  connection are granted to the same agents automatically.
 
 See [DESIGN.md](DESIGN.md) for the architecture and data model.

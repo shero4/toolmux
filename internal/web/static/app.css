@@ -9,3 +9,82 @@
 
 /* Toolmux keeps its compact layout layer in styles.css. daisyUI owns the
    reusable controls and surfaces used by the server-rendered templates. */
+
+.import-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 22px;
+  margin-bottom: 24px;
+}
+.import-summary p,
+.section-heading p,
+.muted {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.import-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 40px;
+}
+.import-grid .form-panel {
+  width: auto;
+}
+.compact-list {
+  border-top: 1px solid var(--line);
+}
+.compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.compact-row:last-child {
+  border-bottom: 0;
+}
+.compact-row strong,
+.compact-row small {
+  display: block;
+}
+.compact-row small {
+  margin-top: 2px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.compact-row .status {
+  max-width: 190px;
+  text-align: right;
+  white-space: normal;
+}
+.credential-update {
+  margin-top: 10px;
+  max-width: 430px;
+}
+.credential-update summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+.credential-update form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.credential-update input {
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .import-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .import-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -22,6 +22,16 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("got %q", plaintext)
 	}
 }
+
+func TestOpenRejectsInvalidNonce(t *testing.T) {
+	box, err := New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := box.Open([]byte("ciphertext"), []byte("short")); err == nil {
+		t.Fatal("expected invalid nonce error")
+	}
+}
 func TestWrongKeyFails(t *testing.T) {
 	one, _ := New(bytes.Repeat([]byte{1}, 32))
 	two, _ := New(bytes.Repeat([]byte{2}, 32))

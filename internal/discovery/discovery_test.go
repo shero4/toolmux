@@ -48,6 +48,19 @@ func TestFindUsesOpaqueCandidateID(t *testing.T) {
 	}
 }
 
+func TestScanRootFindsWindowsHermesProfiles(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, "AppData", "Local", "hermes", "profiles", "ops", "config.yaml"), "mcp_servers: {}\n")
+
+	got := New([]string{home}).Scan(context.Background())
+	for _, candidate := range got {
+		if candidate.Environment == "Mounted host" && candidate.Runtime == "hermes" && candidate.Profile == "ops" {
+			return
+		}
+	}
+	t.Fatalf("Windows Hermes profile not found: %#v", got)
+}
+
 func mustWrite(t *testing.T, path, value string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

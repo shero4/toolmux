@@ -18,6 +18,8 @@ import (
 
 var ErrUnauthorized = errors.New("upstream rejected the credential")
 
+const maxMessageSize = 32 << 20
+
 type Client struct {
 	http *http.Client
 	ids  atomic.Int64
@@ -186,7 +188,8 @@ func (s *session) send(ctx context.Context, payload rpcRequest, expectResponse b
 func decodeResponse(resp *http.Response) (rpcResponse, error) {
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		scanner := bufio.NewScanner(io.LimitReader(resp.Body, 4<<20))
+		scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxMessageSize))
+		scanner.Buffer(make([]byte, 64<<10), maxMessageSize)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "data:") {
@@ -202,7 +205,7 @@ func decodeResponse(resp *http.Response) (rpcResponse, error) {
 		return rpcResponse{}, errors.New("upstream event stream contained no response")
 	}
 	var response rpcResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&response); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxMessageSize)).Decode(&response); err != nil {
 		return rpcResponse{}, fmt.Errorf("decode upstream response: %w", err)
 	}
 	return response, nil

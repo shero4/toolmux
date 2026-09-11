@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -11,10 +12,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shero4/toolmux/internal/checker"
 	"github.com/shero4/toolmux/internal/discovery"
+	"github.com/shero4/toolmux/internal/importer"
 	"github.com/shero4/toolmux/internal/oauth"
 	"github.com/shero4/toolmux/internal/store"
 )
@@ -27,6 +30,7 @@ type Server struct {
 	checker   *checker.Checker
 	oauth     *oauth.Manager
 	discovery *discovery.Scanner
+	importer  *importer.Manager
 	baseURL   string
 	log       *slog.Logger
 	templates *template.Template
@@ -42,6 +46,7 @@ type pageData struct {
 	Connections                            []store.Connection
 	Tools                                  []store.Tool
 	Events                                 []store.AuditEvent
+	Hermes                                 importer.Inventory
 	AgentCount, ConnectionCount, ToolCount int
 }
 
@@ -51,7 +56,7 @@ type setupGuide struct {
 
 var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, discoveryScanner *discovery.Scanner, baseURL string, log *slog.Logger) (*Server, error) {
+func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, discoveryScanner *discovery.Scanner, hermesImporter *importer.Manager, baseURL string, log *slog.Logger) (*Server, error) {
 	functions := template.FuncMap{"date": func(value *time.Time) string {
 		if value == nil {
 			return "Never"
@@ -62,7 +67,7 @@ func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, disco
 	if err != nil {
 		return nil, err
 	}
-	return &Server{store: store, checker: check, oauth: oauth, discovery: discoveryScanner, baseURL: strings.TrimRight(baseURL, "/"), log: log, templates: templates}, nil
+	return &Server{store: store, checker: check, oauth: oauth, discovery: discoveryScanner, importer: hermesImporter, baseURL: strings.TrimRight(baseURL, "/"), log: log, templates: templates}, nil
 }
 
 func (s *Server) Handler(mcpHandler http.Handler) http.Handler {
@@ -77,10 +82,13 @@ func (s *Server) Handler(mcpHandler http.Handler) http.Handler {
 	mux.HandleFunc("GET /connections", s.connections)
 	mux.HandleFunc("POST /connections", s.createConnection)
 	mux.HandleFunc("POST /connections/{id}/check", s.checkConnection)
+	mux.HandleFunc("POST /connections/{id}/credential", s.updateConnectionCredential)
 	mux.HandleFunc("GET /connections/{id}/authorize", s.authorizeConnection)
 	mux.HandleFunc("GET /oauth/callback", s.oauthCallback)
 	mux.HandleFunc("GET /agents", s.agents)
 	mux.HandleFunc("POST /agents/import", s.importAgent)
+	mux.HandleFunc("GET /imports/hermes", s.hermesImport)
+	mux.HandleFunc("POST /imports/hermes", s.importHermes)
 	mux.HandleFunc("GET /tools", s.tools)
 	mux.HandleFunc("POST /tools", s.createTool)
 	mux.HandleFunc("POST /agents", s.createAgent)
@@ -134,6 +142,67 @@ func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, data)
+}
+
+func (s *Server) hermesImport(w http.ResponseWriter, r *http.Request) {
+	inventory, err := s.importer.Scan(r.Context())
+	if err != nil {
+		s.log.Error("scan Hermes configuration", "error", err)
+		s.render(w, pageData{Page: "hermes-import", Title: "Import Hermes", Error: "Hermes configurations could not be read."})
+		return
+	}
+	s.render(w, pageData{Page: "hermes-import", Title: "Import Hermes", Hermes: inventory, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
+}
+
+func (s *Server) importHermes(w http.ResponseWriter, r *http.Request) {
+	inventory, err := s.importer.Scan(r.Context())
+	if err != nil {
+		s.redirectError(w, r, "/imports/hermes", "Hermes configurations could not be read")
+		return
+	}
+	if len(inventory.Profiles) == 0 {
+		s.redirectError(w, r, "/imports/hermes", "No Hermes profiles were found")
+		return
+	}
+	summary, err := s.importer.ImportAll(r.Context(), inventory)
+	if err != nil {
+		s.log.Error("import Hermes configuration", "error", err)
+		s.redirectError(w, r, "/imports/hermes", "The Hermes import stopped before it completed")
+		return
+	}
+	connectionIDs := append([]string(nil), summary.ConnectionIDs...)
+	go func() {
+		seen := make(map[string]bool)
+		sem := make(chan struct{}, 4)
+		var checks sync.WaitGroup
+		for _, id := range connectionIDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			checks.Add(1)
+			go func(connectionID string) {
+				defer checks.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				defer cancel()
+				s.runCheck(ctx, connectionID)
+			}(id)
+		}
+		checks.Wait()
+	}()
+	message := fmt.Sprintf("Imported %d agents and %d connections. Connection checks are running.", summary.AgentsCreated, summary.ConnectionsCreated)
+	if summary.ConfigsUpdated > 0 {
+		message += fmt.Sprintf(" Connected %d Hermes profiles to Toolmux.", summary.ConfigsUpdated)
+	}
+	if len(summary.Warnings) > 0 {
+		message += fmt.Sprintf(" %d profile configurations need attention.", len(summary.Warnings))
+		for _, warning := range summary.Warnings {
+			s.log.Warn("Hermes configuration needs attention", "detail", warning)
+		}
+	}
+	http.Redirect(w, r, "/connections?notice="+url.QueryEscape(message), http.StatusSeeOther)
 }
 
 func (s *Server) importAgent(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +443,29 @@ func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.runCheck(r.Context(), id)
 	http.Redirect(w, r, "/connections?notice="+url.QueryEscape("Connection check completed."), http.StatusSeeOther)
+}
+
+func (s *Server) updateConnectionCredential(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	connection, _, err := s.store.GetConnection(r.Context(), id)
+	if err != nil {
+		s.redirectError(w, r, "/connections", "Connection not found")
+		return
+	}
+	if connection.AuthMethod != "bearer" && connection.AuthMethod != "header" {
+		s.redirectError(w, r, "/connections", "This connection does not use a replaceable key")
+		return
+	}
+	if err := r.ParseForm(); err != nil || strings.TrimSpace(r.FormValue("secret")) == "" {
+		s.redirectError(w, r, "/connections", "Enter a credential")
+		return
+	}
+	if err := s.store.SaveCredential(r.Context(), id, store.Credential{BearerToken: strings.TrimSpace(r.FormValue("secret"))}); err != nil {
+		s.redirectError(w, r, "/connections", "The credential could not be saved")
+		return
+	}
+	s.runCheck(r.Context(), id)
+	http.Redirect(w, r, "/connections?notice="+url.QueryEscape("Credential updated and checked."), http.StatusSeeOther)
 }
 
 func (s *Server) runCheck(ctx context.Context, id string) {

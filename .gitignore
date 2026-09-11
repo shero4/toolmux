@@ -17,6 +17,7 @@ profile.cov
 
 # Dependency directories
 node_modules/
+/tmp/
 # vendor/
 
 # Go workspace files

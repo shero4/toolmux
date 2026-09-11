@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/shero4/toolmux/internal/store"
@@ -69,6 +71,21 @@ func TestUnauthorized(t *testing.T) {
 	_, err := NewClient().Discover(context.Background(), store.Connection{EndpointURL: server.URL}, store.Credential{})
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("got %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestDecodeLargeServerSentEvent(t *testing.T) {
+	payload := `data: {"jsonrpc":"2.0","id":1,"result":{"value":"` + strings.Repeat("x", 128<<10) + `"}}` + "\n\n"
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader(payload)),
+	}
+	decoded, err := decodeResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Result) < 128<<10 {
+		t.Fatalf("result was truncated: %d bytes", len(decoded.Result))
 	}
 }
 

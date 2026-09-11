@@ -33,6 +33,9 @@ func (b *Box) Seal(plaintext []byte) (ciphertext, nonce []byte, err error) {
 }
 
 func (b *Box) Open(ciphertext, nonce []byte) ([]byte, error) {
+	if len(nonce) != b.aead.NonceSize() {
+		return nil, fmt.Errorf("decrypt credential: invalid nonce length %d", len(nonce))
+	}
 	plaintext, err := b.aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt credential: %w", err)

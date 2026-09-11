@@ -25,6 +25,7 @@ type repository interface {
 	ConsumeOAuthState(context.Context, string) (string, string, error)
 	GetConnection(context.Context, string) (store.Connection, store.Credential, error)
 	SaveCredential(context.Context, string, store.Credential) error
+	SaveOAuthClient(context.Context, string, string, string, string, string) error
 }
 
 type Manager struct {
@@ -41,6 +42,22 @@ func (m *Manager) Start(ctx context.Context, connectionID string) (string, error
 	config, err := m.store.GetOAuthConfig(ctx, connectionID)
 	if err != nil {
 		return "", err
+	}
+	callback := m.baseURL + "/oauth/callback"
+	if config.ClientID == "" || (config.RegistrationURL != "" && config.RedirectURI != callback) {
+		client, err := m.register(ctx, config.RegistrationURL, callback)
+		if err != nil {
+			return "", err
+		}
+		if err := m.store.SaveOAuthClient(ctx, connectionID, client.ClientID, client.ClientSecret, client.TokenAuthMethod, callback); err != nil {
+			return "", err
+		}
+		config.ClientID = client.ClientID
+		config.TokenAuthMethod = client.TokenAuthMethod
+		config.RedirectURI = callback
+	}
+	if config.AuthorizationURL == "" || config.TokenURL == "" || config.ClientID == "" {
+		return "", errors.New("OAuth metadata is incomplete")
 	}
 	state, err := random(32)
 	if err != nil {
@@ -61,7 +78,7 @@ func (m *Manager) Start(ctx context.Context, connectionID string) (string, error
 	query := target.Query()
 	query.Set("response_type", "code")
 	query.Set("client_id", config.ClientID)
-	query.Set("redirect_uri", m.baseURL+"/oauth/callback")
+	query.Set("redirect_uri", callback)
 	query.Set("state", state)
 	query.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
 	query.Set("code_challenge_method", "S256")
@@ -70,6 +87,53 @@ func (m *Manager) Start(ctx context.Context, connectionID string) (string, error
 	}
 	target.RawQuery = query.Encode()
 	return target.String(), nil
+}
+
+type registeredClient struct {
+	ClientID        string `json:"client_id"`
+	ClientSecret    string `json:"client_secret"`
+	TokenAuthMethod string `json:"token_endpoint_auth_method"`
+}
+
+func (m *Manager) register(ctx context.Context, registrationURL, redirectURI string) (registeredClient, error) {
+	if registrationURL == "" {
+		return registeredClient{}, errors.New("this provider did not advertise dynamic client registration")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"client_name":                "Toolmux",
+		"redirect_uris":              []string{redirectURI},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"token_endpoint_auth_method": "none",
+	})
+	if err != nil {
+		return registeredClient{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, registrationURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return registeredClient{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	response, err := m.http.Do(request)
+	if err != nil {
+		return registeredClient{}, fmt.Errorf("OAuth client registration: %w", err)
+	}
+	defer response.Body.Close()
+	var client registeredClient
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&client); err != nil {
+		return registeredClient{}, fmt.Errorf("decode OAuth client registration: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 || client.ClientID == "" {
+		return registeredClient{}, fmt.Errorf("OAuth client registration returned %s", response.Status)
+	}
+	if client.TokenAuthMethod == "" {
+		client.TokenAuthMethod = "none"
+	}
+	if client.TokenAuthMethod != "none" && client.TokenAuthMethod != "client_secret_basic" && client.TokenAuthMethod != "client_secret_post" {
+		return registeredClient{}, fmt.Errorf("unsupported OAuth token authentication %q", client.TokenAuthMethod)
+	}
+	return client, nil
 }
 
 func (m *Manager) Complete(ctx context.Context, stateValue, code string) (string, error) {
@@ -159,7 +223,7 @@ func (m *Manager) exchange(ctx context.Context, config store.OAuthConfig, creden
 		form.Set("client_secret", credential.ClientSecret)
 		request.Body = io.NopCloser(strings.NewReader(form.Encode()))
 		request.ContentLength = int64(len(form.Encode()))
-	} else if credential.ClientSecret != "" {
+	} else if config.TokenAuthMethod == "client_secret_basic" && credential.ClientSecret != "" {
 		request.SetBasicAuth(config.ClientID, credential.ClientSecret)
 	}
 	response, err := m.http.Do(request)
