@@ -1,0 +1,9 @@
+services:
+  sentinel:
+    environment:
+      SENTINEL_DISCOVERY_ROOTS: /host-home
+    volumes:
+      - type: bind
+        source: ${SENTINEL_HOST_HOME:?set SENTINEL_HOST_HOME}
+        target: /host-home
+        read_only: true

@@ -1,0 +1,131 @@
+{{define "pages.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Minimal tool access control for agents">
+  <title>{{.Title}} · Sentinel</title>
+  <link rel="stylesheet" href="/static/bundle.css">
+</head>
+<body>
+  <header class="topbar navbar bg-base-100">
+    <a class="brand btn btn-ghost" href="/">Sentinel</a>
+    <nav aria-label="Primary">
+      <a class="btn btn-ghost btn-sm" {{if eq .Page "dashboard"}}aria-current="page"{{end}} href="/">Overview</a>
+      <a class="btn btn-ghost btn-sm" {{if eq .Page "connections"}}aria-current="page"{{end}} href="/connections">Connections</a>
+      <a class="btn btn-ghost btn-sm" {{if eq .Page "tools"}}aria-current="page"{{end}} href="/tools">Tools</a>
+      <a class="btn btn-ghost btn-sm" {{if or (eq .Page "agents") (eq .Page "agent-access")}}aria-current="page"{{end}} href="/agents">Agents</a>
+      <a class="btn btn-ghost btn-sm" {{if eq .Page "activity"}}aria-current="page"{{end}} href="/activity">Activity</a>
+    </nav>
+  </header>
+  <main>
+    {{if .Notice}}<div class="notice alert alert-success" role="status">{{.Notice}}</div>{{end}}
+    {{if .Error}}<div class="error alert alert-error" role="alert">{{.Error}}</div>{{end}}
+    {{if eq .Page "dashboard"}}{{template "dashboard" .}}{{end}}
+    {{if eq .Page "connections"}}{{template "connections" .}}{{end}}
+    {{if eq .Page "tools"}}{{template "tools" .}}{{end}}
+    {{if eq .Page "agents"}}{{template "agents" .}}{{end}}
+    {{if eq .Page "agent-access"}}{{template "agent-access" .}}{{end}}
+    {{if eq .Page "activity"}}{{template "activity" .}}{{end}}
+  </main>
+</body>
+</html>
+{{end}}
+
+{{define "dashboard"}}
+<div class="page-heading"><div><p class="eyebrow">System overview</p><h1>Agent access, clearly accounted for.</h1></div><span class="live"><i></i> Service online</span></div>
+<section class="metrics stats border border-base-300 bg-base-100" aria-label="Totals"><div class="stat"><strong class="stat-value">{{.ConnectionCount}}</strong><span class="stat-title">Connections</span></div><div class="stat"><strong class="stat-value">{{.AgentCount}}</strong><span class="stat-title">Agents</span></div><div class="stat"><strong class="stat-value">{{.ToolCount}}</strong><span class="stat-title">Available tools</span></div></section>
+<div class="split">
+  <section><div class="section-heading"><h2>Connections</h2><a href="/connections">Manage</a></div>{{template "connection-list" .}}</section>
+  <section><div class="section-heading"><h2>Recent activity</h2><a href="/activity">View all</a></div>{{template "activity-list" .}}</section>
+</div>
+{{end}}
+
+{{define "connections"}}
+<div class="page-heading"><div><p class="eyebrow">Upstream services</p><h1>Connections</h1><p>Connect an MCP server, HTTP API, or installed command. Credentials stay here.</p></div></div>
+<div class="split form-split">
+  <section><div class="section-heading"><h2>Configured</h2></div>{{template "connection-list" .}}</section>
+  <section class="form-panel card border border-base-300 bg-base-100"><h2>Add connection</h2><form method="post" action="/connections">
+    <label>Connector name<input name="connector_name" required placeholder="Stripe"></label>
+    <label>Connector slug<input name="connector_slug" pattern="[a-z0-9][a-z0-9-]*" placeholder="stripe"></label>
+    <label>Connection name<input name="name" required placeholder="Primary workspace"></label>
+    <label>Connection slug<input name="connection_slug" pattern="[a-z0-9][a-z0-9-]*" placeholder="primary-workspace"></label>
+    <label>Type<select name="kind"><option value="mcp_http">MCP server</option><option value="http_api">HTTP API</option><option value="command">Installed command</option></select></label>
+    <label>Base endpoint <span>leave blank for commands</span><input type="url" name="endpoint_url" placeholder="https://api.example.com"></label>
+    <label>Health path <span>HTTP APIs only</span><input name="health_path" placeholder="/health"></label>
+    <label>Authorization<select name="auth_method"><option value="none">Use the host environment</option><option value="bearer">Bearer token</option><option value="header">API key header</option><option value="oauth2">OAuth 2.0</option></select></label>
+    <label>Credential header <span>API key only</span><input name="auth_name" placeholder="X-API-Key"></label>
+    <label>Secret <span>token, API key, or OAuth client secret</span><input type="password" name="secret" autocomplete="off"></label>
+    <details><summary>OAuth settings</summary>
+      <label>Authorization URL<input type="url" name="authorization_url" placeholder="https://provider.example/oauth/authorize"></label>
+      <label>Token URL<input type="url" name="token_url" placeholder="https://provider.example/oauth/token"></label>
+      <label>Client ID<input name="client_id" autocomplete="off"></label>
+      <label>Scopes<input name="scopes" placeholder="read write"></label>
+      <label>Token authentication<select name="token_auth_method"><option value="client_secret_basic">HTTP Basic</option><option value="client_secret_post">Request body</option></select></label>
+    </details>
+    <button class="btn btn-primary" type="submit">Add and check</button>
+  </form></section>
+</div>
+{{end}}
+
+{{define "connection-list"}}
+{{if .Connections}}<div class="list card border border-base-300 bg-base-100">{{range .Connections}}<article class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">{{.Kind}}</span><span class="status badge badge-outline badge-sm status-{{.Status}}">{{status .Status}}</span></div><p>{{.ConnectorName}} · {{.ToolCount}} tools · checked {{date .LastCheckedAt}}</p>{{if .LastError}}<p class="row-error">{{.LastError}}</p>{{end}}</div><div class="row-actions">{{if eq .AuthMethod "oauth2"}}<a class="btn btn-ghost btn-sm" href="/connections/{{.ID}}/authorize">Authorize</a>{{end}}<form method="post" action="/connections/{{.ID}}/check"><button class="btn btn-ghost btn-sm" type="submit">Check</button></form></div></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No connections yet</strong><p>Add a service or command to begin.</p></div>{{end}}
+{{end}}
+
+{{define "tools"}}
+<div class="page-heading"><div><p class="eyebrow">Capability catalog</p><h1>Tools</h1><p>MCP tools are discovered automatically. Define only the API calls and commands you intend agents to use.</p></div></div>
+<div class="split form-split">
+  <section><div class="section-heading"><h2>Available</h2></div>{{if .Tools}}<div class="list card border border-base-300 bg-base-100">{{range .Tools}}<article class="row"><div class="row-main"><div class="row-title"><code>{{.ExposedName}}</code><span class="kind badge badge-ghost badge-sm">{{.Kind}}</span></div><p>{{.ConnectionName}}{{if .Description}} · {{.Description}}{{end}}</p></div></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No tools yet</strong><p>Check an MCP connection or define an API or command tool.</p></div>{{end}}</section>
+  <section class="form-panel card border border-base-300 bg-base-100"><h2>Define tool</h2><form method="post" action="/tools">
+    <label>Connection<select name="connection_id" required><option value="">Choose…</option>{{range .Connections}}<option value="{{.ID}}">{{.Name}} · {{.Kind}}</option>{{end}}</select></label>
+    <label>Type<select name="kind"><option value="http">HTTP API call</option><option value="command">Command</option></select></label>
+    <label>Tool name<input name="name" required pattern="[A-Za-z0-9_-]+" placeholder="create_invoice"></label>
+    <label>Title<input name="title" placeholder="Create invoice"></label>
+    <label>Description<textarea name="description" placeholder="Creates an invoice for a customer."></textarea></label>
+    <label>Input schema <span>JSON Schema object</span><textarea class="code-input" name="input_schema" required>{"type":"object","properties":{}}</textarea></label>
+    <details open><summary>HTTP API call</summary>
+      <label>Method<select name="method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label>
+      <label>URL or path <span>use ${input_name}</span><input name="url_template" placeholder="/v1/customers/${customer_id}"></label>
+      <label>Query template <span>JSON string map</span><textarea class="code-input" name="query_template">{}</textarea></label>
+      <label>Header template <span>JSON string map</span><textarea class="code-input" name="headers_template">{}</textarea></label>
+      <label>Body template <span>JSON or blank</span><textarea class="code-input" name="body_template"></textarea></label>
+      <label>Timeout <span>seconds, up to one hour</span><input type="number" name="http_timeout_seconds" min="1" max="3600" value="60"></label>
+    </details>
+    <details><summary>Command</summary>
+      <label>Executable <span>no shell is used</span><input name="executable" placeholder="gh"></label>
+      <label>Working directory <span>optional</span><input name="working_directory" placeholder="/workspace/project"></label>
+      <label>Arguments <span>JSON string array; use ${input_name}</span><textarea class="code-input" name="args_template">[]</textarea></label>
+      <label>Input on stdin<select name="stdin_mode"><option value="none">None</option><option value="json">Complete arguments as JSON</option></select></label>
+      <label>Credential environment variable <span>optional</span><input name="credential_env" pattern="[A-Z_][A-Z0-9_]*" placeholder="GITHUB_TOKEN"></label>
+      <label>Timeout <span>seconds, up to one hour</span><input type="number" name="command_timeout_seconds" min="1" max="3600" value="60"></label>
+    </details>
+    <button class="btn btn-primary" type="submit">Create tool</button>
+  </form></section>
+</div>
+{{end}}
+
+{{define "agents"}}
+<div class="page-heading"><div><p class="eyebrow">Machine identities</p><h1>Agents</h1><p>Every runtime gets an independent endpoint identity and its own tool access.</p></div><a class="btn btn-primary" href="/agents?discover=1">Discover agents</a></div>
+{{if .Token}}<section class="token-panel card"><p>New agent token · shown once</p><code>{{.Token}}</code></section>{{end}}
+{{if .Setup.Title}}<section class="setup-panel card border border-base-300 bg-base-100"><div><p class="eyebrow">Next step</p><h2>{{.Setup.Title}}</h2>{{if .Setup.Destination}}<p>Detected configuration: <code>{{.Setup.Destination}}</code></p>{{end}}</div><pre><code>{{.Setup.Config}}</code></pre><p>{{.Setup.Note}}</p></section>{{end}}
+{{if .Scanned}}<section class="discovery-panel"><div class="section-heading"><div><h2>Found on this system</h2><p>Sentinel only reads configuration locations. Nothing is changed until you import an identity.</p></div><a class="btn btn-ghost btn-sm" href="/agents?discover=1">Scan again</a></div>{{if .Discovered}}<div class="list card border border-base-300 bg-base-100">{{range .Discovered}}<article class="row"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong><span class="kind badge badge-ghost badge-sm">{{.Runtime}}</span></div><p>{{.Environment}} · {{.ConfigPath}}</p></div><form method="post" action="/agents/import"><input type="hidden" name="candidate_id" value="{{.ID}}"><button class="btn btn-primary btn-sm" type="submit">Import</button></form></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No new agents found</strong><p>Already imported agents are hidden. For a container, mount the host home read-only and set <code>SENTINEL_DISCOVERY_ROOTS</code>.</p></div>{{end}}</section>{{end}}
+<div class="split form-split">
+  <section><div class="section-heading"><h2>Configured</h2></div>{{if .Agents}}<div class="list card border border-base-300 bg-base-100">{{range .Agents}}<a class="row linked" href="/agents/{{.ID}}"><div class="row-main"><div class="row-title"><strong>{{.Name}}</strong>{{if .Runtime}}<span class="kind badge badge-ghost badge-sm">{{.Runtime}}</span>{{end}}<span class="status badge badge-outline badge-sm status-{{.Status}}">{{.Status}}</span></div><p>{{.Slug}}{{if .Environment}} · {{.Environment}}{{end}} · {{.ToolCount}} granted tools · last used {{date .LastUsedAt}}</p></div><span aria-hidden="true">→</span></a>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No agents yet</strong><p>Discover installed agents or create an identity manually.</p></div>{{end}}</section>
+  <section class="form-panel card border border-base-300 bg-base-100"><h2>Create manually</h2><form method="post" action="/agents"><label>Agent name<input class="input input-bordered" name="name" required placeholder="Automation agent"></label><label>Agent slug<input class="input input-bordered" name="slug" pattern="[a-z0-9][a-z0-9-]*" placeholder="automation-agent"></label><button class="btn btn-primary" type="submit">Create agent</button></form></section>
+</div>
+{{end}}
+
+{{define "agent-access"}}
+<div class="page-heading"><div><p class="eyebrow"><a href="/agents">Agents</a> / {{.Agent.Slug}}</p><h1>{{.Agent.Name}}</h1><p>Select exactly which tools this agent may discover and invoke.</p></div></div>
+<form method="post" action="/agents/{{.Agent.ID}}/grants">
+{{if .Tools}}<div class="tool-list card border border-base-300 bg-base-100">{{range .Tools}}<label class="tool"><input class="checkbox checkbox-sm" type="checkbox" name="tool_id" value="{{.ID}}" {{if .Granted}}checked{{end}}><span><strong>{{.ExposedName}}</strong><small>{{.ConnectionName}} · {{.Kind}}{{if .Description}} · {{.Description}}{{end}}</small></span></label>{{end}}</div><div class="sticky-actions"><button class="btn btn-primary" type="submit">Save access</button></div>{{else}}<div class="empty card border border-base-300"><strong>No tools available</strong><p>Add and check a connection first.</p></div>{{end}}
+</form>
+{{if eq .Agent.Status "active"}}<section class="danger-zone"><div><strong>Disable this agent</strong><p>Its tokens will stop working immediately. Audit history is preserved.</p></div><form method="post" action="/agents/{{.Agent.ID}}/disable"><button class="btn btn-error btn-outline" type="submit">Disable agent</button></form></section>{{end}}
+{{end}}
+
+{{define "activity"}}<div class="page-heading"><div><p class="eyebrow">Audit trail</p><h1>Activity</h1><p>Authorization decisions and invocation outcomes. Payloads are not retained.</p></div></div>{{template "activity-list" .}}{{end}}
+
+{{define "activity-list"}}
+{{if .Events}}<div class="list audit card border border-base-300 bg-base-100">{{range .Events}}<article class="row"><div class="decision decision-{{.Decision}}">{{.Decision}}</div><div class="row-main"><div class="row-title"><strong>{{.AgentName}}</strong><code>{{.ToolName}}</code></div><p>{{.ConnectionName}} · {{.Method}}{{if .DurationMS}} · {{.DurationMS}} ms{{end}} · {{time .CreatedAt}}</p>{{if .Reason}}<p class="row-error">{{.Reason}}</p>{{end}}</div></article>{{end}}</div>{{else}}<div class="empty card border border-base-300"><strong>No activity yet</strong><p>Agent calls will appear here.</p></div>{{end}}
+{{end}}

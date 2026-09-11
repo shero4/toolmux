@@ -1,0 +1,12 @@
+{
+  "name": "sentinel-ui",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i internal/web/static/app.css -o internal/web/static/bundle.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "daisyui": "5.7.36",
+    "tailwindcss": "4.3.3"
+  }
+}

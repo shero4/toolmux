@@ -1,0 +1,132 @@
+# Sentinel
+
+Sentinel is a small, self-hosted tool access broker for agents. Connect an MCP
+server, HTTP API, or installed CLI once, issue each agent its own token, and
+explicitly grant the tools that agent may discover and call. Every capability is
+presented to agents through one MCP endpoint.
+
+Sentinel deliberately does not route models, run agents, manage prompts, act as
+an AI gateway, or sandbox its host. The machine or container is trusted. The
+security boundary is the agent-facing MCP endpoint and its per-agent grants.
+
+## What works
+
+- One Streamable HTTP endpoint at `/mcp` for every agent
+- Hashed, individually revocable agent tokens
+- Remote Streamable HTTP MCP connections with automatic tool discovery
+- Declarative HTTP API tools with typed input schemas and safe URL/body templates
+- Declarative CLI tools that use the host's installed binaries, environment, and
+  optional working directory
+- No-auth, bearer-token, and OAuth 2.0 upstream authentication
+- Authorization Code + PKCE, encrypted refresh tokens, and refresh before expiry
+- Tool discovery with stable `connection__tool` names
+- Per-agent tool grants, enforced on discovery and invocation
+- Read-only discovery of Hermes and OpenClaw agents on the host and in WSL
+- Encrypted upstream credentials
+- Active reachability, protocol, authorization, and capability checks
+- Append-only audit events
+- A server-rendered administration interface
+- daisyUI components compiled to one embedded CSS asset; no browser framework
+- PostgreSQL migrations applied atomically at startup
+
+## Run locally
+
+Build the image, then generate the required encryption key:
+
+```sh
+docker compose build
+docker compose run --rm --no-deps sentinel keygen
+```
+
+Copy `.env.example` to `.env`, replace the key, then run:
+
+```sh
+docker compose up --build
+```
+
+Open `http://localhost:8080`. Sentinel assumes its host and network are trusted,
+so the administration interface has no separate login. When exposing it from a
+remote machine, keep it on a private network or place it behind your existing
+reverse proxy authentication.
+
+### Discover installed agents
+
+When Sentinel runs directly on a computer, the **Discover agents** button scans
+the current user's standard Hermes and OpenClaw configuration locations. On
+Windows it also inspects WSL distributions. Detection is read-only and ignores
+directories that do not contain an agent configuration.
+
+A container cannot see host files unless they are mounted. Set
+`SENTINEL_HOST_HOME` in `.env`, then include the small discovery override:
+
+```sh
+docker compose -f compose.yaml -f compose.discovery.yaml up --build
+```
+
+The host home is mounted read-only. Sentinel looks for Hermes' default profile
+and named profiles below `.hermes`, plus OpenClaw agents below `.openclaw` and
+named `.openclaw-*` state directories. You can instead set
+`SENTINEL_DISCOVERY_ROOTS` to an OS path-list when running the binary directly.
+
+## Connect an agent
+
+Create an agent in the web interface and copy its token when shown. Configure
+Hermes, OpenClaw, or another MCP client with:
+
+```text
+URL: http://localhost:8080/mcp
+Authorization: Bearer <agent token>
+```
+
+Tokens are displayed once. Sentinel stores only their SHA-256 hashes.
+
+Imported Hermes agents receive a ready-to-merge `mcp_servers` entry. Imported
+OpenClaw agents receive an exact `openclaw mcp set` command and a probe command.
+Sentinel does not silently rewrite either tool's configuration.
+
+For an OAuth connection, register this redirect URL with the provider:
+
+```text
+http://localhost:8080/oauth/callback
+```
+
+Use the public `SENTINEL_BASE_URL` instead of localhost when Sentinel is behind
+TLS. Sentinel uses Authorization Code with PKCE and refreshes access tokens one
+minute before expiry. Providers that require dynamic client registration are not
+yet supported; supply a client ID and, when required, a client secret.
+
+## Expose an HTTP API
+
+Create an `HTTP API` connection with the service's base URL and authorization.
+Then define each permitted operation on the Tools page. Paths, query values,
+headers, and JSON bodies may reference top-level inputs as `${input_name}`.
+An operation may use a relative path or a complete HTTP URL. Authorization can
+be a bearer token, OAuth 2.0 token, or any named credential header.
+
+## Expose a CLI
+
+Create an `Installed command` connection, then define a tool with an executable
+and a JSON array of arguments. Arguments may reference top-level inputs as
+`${input_name}`. Sentinel calls the executable directly, inherits the host
+environment so existing CLI authorization keeps working, and supports an
+optional working directory. The stock image is intentionally minimal; extend it
+with the CLI binaries you use, or run the binary directly on a configured host.
+Per-tool timeouts prevent accidental hangs and may be set up to one hour.
+
+## Design constraints
+
+- The service fails closed when identity, grants, or credentials cannot be read.
+- Agents never receive upstream credentials.
+- Unauthorized tools are absent from `tools/list` and rejected by `tools/call`.
+- Connection checks never invoke API operations or commands. They discover MCP
+  tools, send `HEAD` to an API health path, or verify that command executables
+  exist.
+- The default deployment is one application container and one PostgreSQL
+  container. There is no queue, cache, policy engine, or browser application
+  runtime.
+- Tailwind and daisyUI run only in the image build stage. Node is not present in
+  the production image and the interface remains server-rendered.
+- Connection health does not revoke grants. A configured agent keeps its access;
+  health status explains why an upstream may currently be unavailable.
+
+See [DESIGN.md](DESIGN.md) for the architecture and data model.
