@@ -101,5 +101,5 @@ guides cover initial setup, DNS, TLS, persistent data, backups, and upgrades.
 - [Documentation index](docs/README.md)
 - [Connect tools](docs/tools.md) · [Connect clients](docs/clients.md) · [Model providers](MODEL_GATEWAY.md)
 - [Users, tokens, and monitoring](docs/administration.md)
-- [Configuration reference](docs/configuration.md)
+- [Configuration reference](docs/configuration.md) · [Dashboard updates](deploy/UPDATES.md)
 - [Development](docs/development.md) · [Architecture](DESIGN.md) · [Security](SECURITY.md)
