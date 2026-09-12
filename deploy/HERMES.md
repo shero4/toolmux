@@ -95,6 +95,9 @@ Before stopping a local profile, verify with its Toolmux token:
 Cut over one profile at a time:
 
 1. Stop the local Slack gateway and scheduler cleanly.
+   Remove that profile from any local watchdog and disable its login/startup
+   entry first; wait longer than the watchdog interval and verify the process
+   does not return.
 2. Copy the final database and file delta; compare checksums and counts.
 3. Start the remote gateway and cron scheduler together.
 4. Send a unique test request in its dedicated Slack channel.
