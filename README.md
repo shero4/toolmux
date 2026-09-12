@@ -96,6 +96,7 @@ Choose the layout that fits where your tools run:
 | Containers on a Linux server or EC2, using remote tools and APIs | [Container deployment](deploy/EC2.md) |
 | A native Linux service with access to installed tools and local client files | [Native deployment](deploy/NATIVE.md) |
 | Public MCP and inference over HTTPS, with VPN-only administration | [Public gateway](deploy/GATEWAY.md) |
+| Move existing Hermes profiles onto the Toolmux host | [Hermes migration](deploy/HERMES.md) |
 
 The public gateway uses standard ports 443/80. The administration interface can
 stay on private port 8080, while clients on the host use loopback. Deployment
