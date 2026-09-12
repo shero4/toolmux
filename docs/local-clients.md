@@ -32,8 +32,8 @@ agent identities.
 ## Hermes profile import
 
 Run Toolmux directly on the host when you want to reuse host-installed stdio
-MCPs or CLIs. On **Agents → Discover installed**, choose **Import** on a
-profile or **Import all Hermes profiles**. The import is idempotent and:
+MCPs or CLIs. On **Agents → Discover installed**, choose **Import profile** on the matching
+row in Agent profiles. The import is idempotent and:
 
 - creates one Toolmux agent for every Hermes profile;
 - keeps separate instances when the same MCP is configured in multiple profiles;
