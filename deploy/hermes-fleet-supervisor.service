@@ -1,0 +1,18 @@
+[Unit]
+Description=Hermes work-profile fleet supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/hermes-fleet-supervisor.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/hermes/profiles
+
+[Install]
+WantedBy=multi-user.target

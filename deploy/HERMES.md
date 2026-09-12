@@ -16,8 +16,22 @@ Use one unprivileged `hermes` account and one isolated home per profile:
 /etc/hermes/profiles/<profile>.env  root-managed runtime secrets
 ```
 
-Run each profile through `hermes-gateway@<profile>.service`. Set
-`HERMES_HOME`, `HERMES_CONFIG`, `CHROME_USER_DATA_DIR`, and the matching
+Run each profile through `hermes-gateway@<profile>.service`. Install
+`deploy/hermes-fleet-supervisor.py` and
+`deploy/hermes-fleet-supervisor.service` to watch only enabled work-profile
+units. A staged profile remains stopped until its unit is explicitly enabled.
+The supervisor restarts inactive gateways immediately, and restarts a gateway
+after two stale-heartbeat or disconnected-Slack checks. Its cooldown and restart
+limit prevent a crash loop.
+
+```bash
+sudo install -m 0755 deploy/hermes-fleet-supervisor.py /usr/local/lib/
+sudo install -m 0644 deploy/hermes-fleet-supervisor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hermes-fleet-supervisor.service
+```
+
+Set `HERMES_HOME`, `HERMES_CONFIG`, `CHROME_USER_DATA_DIR`, and the matching
 environment file in the unit. Give each unit memory and task limits, and avoid
 running many browser-heavy jobs at once on smaller hosts.
 
