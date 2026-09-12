@@ -20,8 +20,8 @@
       <a href="/connections" {{if eq .Nav "connections"}}aria-current="page"{{end}}>{{template "icon-connections"}}<span>Connections</span></a>
       <a href="/activity" {{if eq .Nav "activity"}}aria-current="page"{{end}}>{{template "icon-activity"}}<span>Activity</span></a>
       <a href="/providers" {{if eq .Nav "providers"}}aria-current="page"{{end}}>{{template "icon-connections"}}<span>Models</span></a>
-      <a href="/settings" {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations")}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Administration</span></a>
-      <a href="/docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Docs</span></a>
+      <a href="/settings" {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations") (eq .Nav "updates")}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Administration</span></a>
+      <a href="/docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>{{template "icon-docs"}}<span>Docs</span></a>
 
     </nav>
     <div class="sidebar-foot">
@@ -35,12 +35,12 @@
   <main class="main">
     {{if and (ne .Nav "auth") (not .CanManage)}}<p class="access-notice">Signed in as {{.User.Username}} · Viewer · Read-only access</p>{{end}}
     {{with .Flash}}{{template "flash" .}}{{end}}
-    {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations")}}
+    {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations") (eq .Nav "updates")}}
     <nav class="admin-tabs" aria-label="Administration">
       <a href="/settings" {{if eq .Nav "settings"}}aria-current="page"{{end}}>Settings</a>
       {{if .IsAdmin}}<a href="/users" {{if eq .Nav "users"}}aria-current="page"{{end}}>Users and roles</a>{{end}}
       <a href="/operations" {{if eq .Nav "operations"}}aria-current="page"{{end}}>Operational logs</a>
- {{if .IsAdmin}}<a href="/settings/updates">Updates</a>{{end}}
+      {{if .IsAdmin}}<a href="/settings/updates" {{if eq .Nav "updates"}}aria-current="page"{{end}}>Updates</a>{{end}}
     </nav>
     {{end}}
     {{template "content" .}}

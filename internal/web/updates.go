@@ -8,7 +8,7 @@ import (
 
 func (s *Server) RunUpdates(ctx context.Context) { s.updates.Run(ctx) }
 func (s *Server) updatesPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, 200, "updates", "settings", "Updates", s.updates.View())
+	s.render(w, r, 200, "updates", "updates", "Updates", s.updates.View())
 }
 func (s *Server) updatesStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

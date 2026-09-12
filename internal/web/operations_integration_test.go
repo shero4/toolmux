@@ -133,6 +133,10 @@ func TestRotationAndMonitoring(t *testing.T) {
 			t.Fatal(page, w.Code, w.Body.String())
 		}
 	}
+	w = request("GET", "/settings/updates", nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `href="/settings/updates" aria-current="page">Updates</a>`) || strings.Contains(w.Body.String(), `href="/settings" aria-current="page">Settings</a>`) {
+		t.Fatal("update navigation does not identify the active subsection", w.Code)
+	}
 }
 func TestOperationRoleBoundaries(t *testing.T) {
 	for _, role := range []string{"viewer", "operator"} {
