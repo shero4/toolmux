@@ -70,7 +70,11 @@ def request_json(
     body: Any = None,
 ) -> tuple[int, Any]:
     data = None if body is None else json.dumps(body).encode("utf-8")
-    request_headers = {"Accept": "application/json", **(headers or {})}
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; Toolmux/1.0; +https://github.com/shero4/toolmux)",
+        **(headers or {}),
+    }
     if data is not None:
         request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
