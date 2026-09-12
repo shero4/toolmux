@@ -29,7 +29,17 @@ Set `TOOLMUX_DOMAIN=mcp.example.com` in `/etc/toolmux/toolmux.env`, then run:
 sudo docker compose --env-file /etc/toolmux/toolmux.env -p toolmux-gateway -f /opt/toolmux/deploy/compose.gateway.yaml up -d
 ```
 
-Allow public TCP 80 and 443 in the instance security group. Port 80 redirects to
+Allow public TCP 80 and 443 in the instance security group. For the starter
+CloudFormation template these are explicit post-install rules (the initial stack
+allows only SSH). Record them alongside the separately managed VPN rules and
+preserve them during stack updates:
+
+```sh
+aws ec2 authorize-security-group-ingress --region REGION --group-id SECURITY_GROUP --protocol tcp --port 80 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-ingress --region REGION --group-id SECURITY_GROUP --protocol tcp --port 443 --cidr 0.0.0.0/0
+```
+
+ Port 80 redirects to
 HTTPS and handles certificate validation; agents must send credentials only to
 HTTPS. Caddy forwards only exact `/mcp` and `/v1/*` paths to loopback port 8080,
 preserving authorization headers and streaming responses. Everything else,
