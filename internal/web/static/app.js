@@ -172,3 +172,22 @@
   }
   update();
 })();
+(function () {
+  var links = document.querySelectorAll('[data-update-link]');
+  if (!links.length) return;
+  var wasRunning = false;
+  async function refresh() {
+    try {
+      var response = await fetch('/settings/updates/status', {credentials:'same-origin'});
+      if (!response.ok || response.redirected) return;
+      var state = await response.json();
+      links.forEach(function(link) { link.hidden = !state.available && state.phase !== 'running'; link.textContent = state.phase === 'running' ? 'Updating…' : 'Update available'; });
+      var message = document.querySelector('[data-update-message]');
+      if (message && state.message) message.textContent = state.message;
+      if (message && wasRunning && state.phase !== 'running') location.reload();
+      wasRunning = state.phase === 'running';
+    } catch (_) { /* The server may be restarting; retry without losing the page. */ }
+    finally { setTimeout(refresh, 10000); }
+  }
+  refresh();
+})();

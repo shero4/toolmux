@@ -3,7 +3,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/toolmux ./cmd/toolmux
+ARG VCS_REF
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/shero4/toolmux/internal/updater.Revision=${VCS_REF}" -o /out/toolmux ./cmd/toolmux
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/toolmux /toolmux

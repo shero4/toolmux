@@ -14,6 +14,7 @@ These guides cover the next steps without depending on a particular agent runtim
 | Run a native Linux service | [Native deployment](../deploy/NATIVE.md) |
 | Separate public agents from private administration | [Public gateway](../deploy/GATEWAY.md) |
 | Reuse supported installed-client configurations | [Discovery and import](local-clients.md) |
+| Check and install application updates | [Updates](../deploy/UPDATES.md) |
 | Contribute or run tests | [Development](development.md) |
 | Understand implementation and trust boundaries | [Architecture](../DESIGN.md), [Security](../SECURITY.md) |
 

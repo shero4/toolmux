@@ -25,6 +25,7 @@ import (
 	"github.com/shero4/toolmux/internal/oauth"
 	"github.com/shero4/toolmux/internal/operations"
 	"github.com/shero4/toolmux/internal/store"
+	"github.com/shero4/toolmux/internal/updater"
 )
 
 //go:embed templates static
@@ -45,6 +46,7 @@ type Server struct {
 	modelClient  *http.Client
 	operations   *operations.Monitor
 	rotationMu   sync.Mutex
+	updates      *updater.Manager
 }
 
 // view is the data every page receives. Page-specific data lives in Data.
@@ -70,6 +72,7 @@ func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, scann
 	}
 	s.assetVersion = version
 	s.operations = operations.New(store, check)
+	s.updates = updater.New()
 	s.modelClient = gateway.Client()
 	base, err := template.New("").Funcs(functions()).ParseFS(assets, "templates/layout.html", "templates/partials.html")
 	if err != nil {
@@ -132,6 +135,9 @@ func (s *Server) Handler(mcpHandler, adminHandler http.Handler, inference ...htt
 	mux.HandleFunc("POST /login", s.submitAuth)
 	mux.HandleFunc("POST /logout", s.logout)
 	mux.HandleFunc("GET /settings", s.settings)
+	mux.HandleFunc("GET /settings/updates", s.updatesPage)
+	mux.HandleFunc("GET /settings/updates/status", s.updatesStatus)
+	mux.HandleFunc("POST /settings/updates", s.installUpdate)
 	mux.HandleFunc("POST /settings/password", s.changePassword)
 	mux.HandleFunc("POST /settings/monitoring", s.saveMonitoring)
 	mux.HandleFunc("POST /settings/webhook/test", s.testWebhook)

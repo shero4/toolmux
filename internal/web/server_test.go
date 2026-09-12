@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/shero4/toolmux/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -96,6 +97,19 @@ func TestReturnTargetOnlyAcceptsLocalPaths(t *testing.T) {
 	for _, value := range []string{"", "https://evil.example", "//evil.example/path", "javascript:alert(1)"} {
 		if got := returnTarget(value, "/fallback"); got != "/fallback" {
 			t.Fatalf("%q was accepted as %q", value, got)
+		}
+	}
+}
+
+func TestUpdatesRequireAdministrator(t *testing.T) {
+	for _, role := range []string{"admin", "operator", "viewer"} {
+		for _, method := range []string{"GET", "POST"} {
+			for _, path := range []string{"/settings/updates", "/settings/updates/status"} {
+				got := permitted(store.User{Role: role, Enabled: true}, httptest.NewRequest(method, path, nil))
+				if got != (role == "admin") {
+					t.Fatalf("%s %s %s permission=%v", role, method, path, got)
+				}
+			}
 		}
 	}
 }

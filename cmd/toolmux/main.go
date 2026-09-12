@@ -98,6 +98,7 @@ func main() {
 	// given a fixed write deadline; each executor bounds its own work.
 	server := &http.Server{Addr: cfg.Addr, Handler: ui.Handler(mcpHandler, adminHandler, gateway.New(db, log)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go ui.RunOperations(ctx)
+	go ui.RunUpdates(ctx)
 	go func() {
 		log.Info("toolmux started", "addr", cfg.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

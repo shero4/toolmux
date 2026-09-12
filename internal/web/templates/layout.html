@@ -29,7 +29,7 @@
       <p>{{.User.Username}} · {{.User.Role}}</p>
       <span>Agent endpoint</span>
       <code>{{.Endpoint}}</code>
-      <form action="/logout" method="post"><button class="btn btn-ghost" type="submit">Sign out</button></form>
+      {{if .IsAdmin}}<a class="btn btn-ghost" href="/settings/updates" data-update-link hidden>Update available</a>{{end}}<form action="/logout" method="post"><button class="btn btn-ghost" type="submit">Sign out</button></form>
     </div>
   </aside>
   {{end}}
@@ -41,10 +41,11 @@
       <a href="/settings" {{if eq .Nav "settings"}}aria-current="page"{{end}}>Settings</a>
       {{if .IsAdmin}}<a href="/users" {{if eq .Nav "users"}}aria-current="page"{{end}}>Users and roles</a>{{end}}
       <a href="/operations" {{if eq .Nav "operations"}}aria-current="page"{{end}}>Operational logs</a>
+ {{if .IsAdmin}}<a href="/settings/updates">Updates</a>{{end}}
     </nav>
     {{end}}
     {{template "content" .}}
-    {{if ne .Nav "auth"}}<footer class="mobile-account"><span>{{.User.Username}} · {{.User.Role}}</span><form action="/logout" method="post"><button class="btn btn-ghost" type="submit">Sign out</button></form></footer>{{end}}
+    {{if ne .Nav "auth"}}<footer class="mobile-account"><span>{{.User.Username}} · {{.User.Role}}</span>{{if .IsAdmin}}<a class="btn btn-ghost" href="/settings/updates" data-update-link hidden>Update available</a>{{end}}<form action="/logout" method="post"><button class="btn btn-ghost" type="submit">Sign out</button></form></footer>{{end}}
   </main>
 </div>
 </body>

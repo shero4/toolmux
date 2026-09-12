@@ -1,0 +1,12 @@
+{{define "content"}}
+<header class="page-header"><div><h1>Updates</h1><p class="lede">Updates from the public Toolmux repository on GitHub.</p></div></header>
+<div class="panel"><div class="panel-body">
+<p>Installed revision: <code>{{.Data.Current}}</code></p>
+{{if .Data.Latest}}<p>Latest revision: <code>{{.Data.Latest}}</code></p>{{end}}
+<p data-update-message>{{if .Data.Message}}{{.Data.Message}}{{else if .Data.Error}}{{.Data.Error}}{{else if .Data.Available}}A new version is available.{{else}}No new version detected. Checks run every 15 minutes.{{end}}</p>
+{{if .Data.Enabled}}<p>The update builds first, saves a database backup, and briefly restarts Toolmux. Active requests may be interrupted. Settings and credentials are preserved.</p>
+{{if .Data.Available}}<form method="post" action="/settings/updates"><input type="hidden" name="revision" value="{{.Data.Latest}}"><button class="btn btn-primary" type="submit" {{if eq .Data.Phase "running"}}disabled{{end}}>Update and restart</button></form>{{end}}
+{{else}}<p>Automatic installation is not configured for this deployment. Update through your container or host deployment process. Native Linux installations can enable the update service described in the repository's deployment guide.</p>{{end}}
+<p><a href="https://github.com/shero4/toolmux/commits/main" target="_blank" rel="noopener noreferrer">View changes on GitHub</a></p>
+</div></div>
+{{end}}

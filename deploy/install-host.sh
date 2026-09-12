@@ -11,7 +11,7 @@ fi
 id toolmux >/dev/null 2>&1 || useradd --create-home --home-dir /var/lib/toolmux --shell /bin/bash toolmux
 usermod -aG docker toolmux
 install -d -m 750 -o toolmux -g toolmux /etc/toolmux
-docker build --target build -t toolmux-host-build .
+docker build --target build --build-arg "VCS_REF=$(git rev-parse HEAD)" -t toolmux-host-build .
 build_container=$(docker create toolmux-host-build true)
 trap 'docker rm "$build_container" >/dev/null' EXIT
 docker cp "$build_container:/out/toolmux" /usr/local/bin/toolmux
