@@ -30,6 +30,7 @@ type Store struct {
 type Agent struct {
 	ID, Slug, Name, Status                               string
 	SourceKey, Runtime, Profile, Environment, ConfigPath string
+	PrimaryModel, FallbackModel                          string
 	ToolCount, TokenCount                                int
 	LastUsedAt                                           *time.Time
 	CreatedAt                                            time.Time

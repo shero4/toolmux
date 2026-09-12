@@ -8,6 +8,16 @@
 </header>
 
 <section class="panel">
+  <header class="panel-header"><h2>Runtime models</h2><span>References used by this agent's configuration</span></header>
+  <form class="panel-body form-grid" method="post" action="/agents/{{$a.ID}}/models">
+    <div class="field"><label for="primary_model">Primary model</label><select id="primary_model" name="primary_model"><option value="">Not recorded</option>{{range $d.Models}}<option value="{{.}}" {{if eq . $a.PrimaryModel}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+    <div class="field"><label for="fallback_model">Fallback model</label><select id="fallback_model" name="fallback_model"><option value="">No fallback recorded</option>{{range $d.Models}}<option value="{{.}}" {{if eq . $a.FallbackModel}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+    <p class="hint">Toolmux validates and tracks these selections so catalog changes can warn you. The agent still sends the concrete model ID on each request.</p>
+    {{if $.CanManage}}<div class="form-actions"><button class="btn btn-primary" type="submit">Save models</button></div>{{end}}
+  </form>
+</section>
+
+<section class="panel">
   <header class="panel-header"><h2>Tokens</h2><span>Endpoint <code>{{$.Endpoint}}</code></span></header>
   {{if $d.Tokens}}
   <table class="table">

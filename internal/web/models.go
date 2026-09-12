@@ -168,3 +168,36 @@ func (s *Server) discoverModels(w http.ResponseWriter, r *http.Request) {
 	}
 	s.redirect(w, r, "/providers/"+p.ID, fl)
 }
+
+func (s *Server) setProviderModel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	provider, err := s.store.GetModelProvider(r.Context(), id)
+	if err != nil {
+		s.notFound(w, r, "Provider")
+		return
+	}
+	if err = r.ParseForm(); err != nil {
+		s.redirect(w, r, "/providers/"+id, errorFlash("The form could not be read."))
+		return
+	}
+	model := strings.TrimSpace(r.FormValue("model"))
+	enabled := r.FormValue("enabled") == "true"
+	users, err := s.store.AgentsUsingModel(r.Context(), provider.Slug+"/"+model)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !enabled && len(users) > 0 && r.FormValue("confirmed") != "true" {
+		names := make([]string, 0, len(users))
+		for _, agent := range users {
+			names = append(names, agent.Name)
+		}
+		s.redirect(w, r, "/providers/"+id, errorFlash("Model is still referenced by: "+strings.Join(names, ", ")+". Confirm from its catalog row to disable it."))
+		return
+	}
+	if err = s.store.SetProviderModelEnabled(r.Context(), id, model, enabled); err != nil {
+		s.redirect(w, r, "/providers/"+id, errorFlash("The model could not be updated."))
+		return
+	}
+	s.redirect(w, r, "/providers/"+id, flash{Kind: "ok", Message: "Model availability updated."})
+}

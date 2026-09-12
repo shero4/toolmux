@@ -163,6 +163,7 @@ func (s *Server) Handler(mcpHandler, adminHandler http.Handler, inference ...htt
 	mux.HandleFunc("GET /providers/{id}", s.provider)
 	mux.HandleFunc("POST /providers/{id}", s.saveProvider)
 	mux.HandleFunc("POST /providers/{id}/discover", s.discoverModels)
+	mux.HandleFunc("POST /providers/{id}/models", s.setProviderModel)
 
 	mux.HandleFunc("GET /agents", s.agents)
 	mux.HandleFunc("GET /agents/new", s.newAgent)
@@ -171,6 +172,7 @@ func (s *Server) Handler(mcpHandler, adminHandler http.Handler, inference ...htt
 	mux.HandleFunc("POST /agents/import", s.importCandidate)
 	mux.HandleFunc("POST /agents/import/hermes", s.importHermes)
 	mux.HandleFunc("GET /agents/{id}", s.agent)
+	mux.HandleFunc("POST /agents/{id}/models", s.saveAgentModels)
 	mux.HandleFunc("POST /agents/{id}/tokens", s.issueAgentToken)
 	mux.HandleFunc("POST /agents/{id}/tokens/{tokenID}/revoke", s.revokeAgentToken)
 	mux.HandleFunc("POST /agents/{id}/grants", s.saveGrants)

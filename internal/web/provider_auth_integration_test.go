@@ -90,6 +90,25 @@ func TestProviderAuthPersistenceAndRedaction(t *testing.T) {
 	if _, _, _, err = db.ResolveModel(ctx, "native/automatic-two"); err != nil {
 		t.Fatal("failed discovery changed the last known-good catalog", err)
 	}
+	agent, _, err := db.CreateAgent(ctx, "Catalog user", "catalog-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SetAgentModels(ctx, agent.ID, "native/model", "native/automatic-two"); err != nil {
+		t.Fatal("record agent models", err)
+	}
+	modelsForProvider, err := db.ProviderModels(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range modelsForProvider {
+		if (model.Model == "model" || model.Model == "automatic-two") && model.ReferencedBy != 1 {
+			t.Fatalf("model %s reference count = %d", model.Model, model.ReferencedBy)
+		}
+	}
+	if err = db.SetAgentModels(ctx, agent.ID, "native/missing", ""); err == nil {
+		t.Fatal("unavailable model reference was accepted")
+	}
 }
 
 func containsModel(values []string, wanted string) bool {

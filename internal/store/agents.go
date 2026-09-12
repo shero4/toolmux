@@ -11,7 +11,7 @@ import (
 )
 
 const agentColumns = `
-	SELECT a.id, a.slug, a.name, a.status, a.created_at,
+	SELECT a.id, a.slug, a.name, a.status, a.created_at, a.primary_model, a.fallback_model,
 	       coalesce(i.source_key,''), coalesce(i.runtime,''), coalesce(i.profile,''), coalesce(i.environment,''), coalesce(i.config_path,''),
 	       (SELECT count(*) FROM grants g JOIN tools t ON t.id=g.tool_id WHERE g.agent_id=a.id AND t.enabled),
 	       (SELECT count(*) FROM agent_tokens k WHERE k.agent_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())),
@@ -20,8 +20,35 @@ const agentColumns = `
 
 func scanAgent(row pgx.Row) (Agent, error) {
 	var a Agent
-	err := row.Scan(&a.ID, &a.Slug, &a.Name, &a.Status, &a.CreatedAt, &a.SourceKey, &a.Runtime, &a.Profile, &a.Environment, &a.ConfigPath, &a.ToolCount, &a.TokenCount, &a.LastUsedAt)
+	err := row.Scan(&a.ID, &a.Slug, &a.Name, &a.Status, &a.CreatedAt, &a.PrimaryModel, &a.FallbackModel, &a.SourceKey, &a.Runtime, &a.Profile, &a.Environment, &a.ConfigPath, &a.ToolCount, &a.TokenCount, &a.LastUsedAt)
 	return a, err
+}
+
+// SetAgentModels records the concrete catalog IDs selected in the runtime.
+// Routing still follows the model on each inference request.
+func (s *Store) SetAgentModels(ctx context.Context, id, primary, fallback string) error {
+	for _, model := range []string{primary, fallback} {
+		if model == "" {
+			continue
+		}
+		var available bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM provider_models m JOIN model_providers p ON p.id=m.provider_id
+			WHERE p.slug||'/'||m.model=$1 AND p.enabled AND m.enabled)`, model).Scan(&available); err != nil {
+			return err
+		}
+		if !available {
+			return errors.New("model is not available in the catalog")
+		}
+	}
+	command, err := s.pool.Exec(ctx, `UPDATE agents SET primary_model=$2,fallback_model=$3 WHERE id=$1`, id, primary, fallback)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) ListAgents(ctx context.Context) ([]Agent, error) {

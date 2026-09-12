@@ -26,6 +26,7 @@ type agentForm struct {
 
 type agentPage struct {
 	Agent       store.Agent
+	Models      []string
 	Tokens      []store.AgentToken
 	Connections []store.Connection
 	Tools       []store.Tool
@@ -280,6 +281,11 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	models, err := s.store.AvailableModels(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	tokens, err := s.store.ListAgentTokens(ctx, agent.ID)
 	if err != nil {
 		s.fail(w, err)
@@ -291,8 +297,26 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	page := agentPage{Agent: agent, Tokens: tokens, Connections: connections, Tools: tools, Filter: filter, Pager: pagination}
+	page := agentPage{Agent: agent, Models: models, Tokens: tokens, Connections: connections, Tools: tools, Filter: filter, Pager: pagination}
 	s.render(w, r, http.StatusOK, "agent", "agents", agent.Name, page)
+}
+
+func (s *Server) saveAgentModels(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		s.redirect(w, r, "/agents/"+id, errorFlash("The form could not be read."))
+		return
+	}
+	primary, fallback := r.FormValue("primary_model"), r.FormValue("fallback_model")
+	if primary != "" && primary == fallback {
+		s.redirect(w, r, "/agents/"+id, errorFlash("Choose a different fallback model."))
+		return
+	}
+	if err := s.store.SetAgentModels(r.Context(), id, primary, fallback); err != nil {
+		s.redirect(w, r, "/agents/"+id, errorFlash("Choose models that are currently available in the Toolmux catalog."))
+		return
+	}
+	s.redirect(w, r, "/agents/"+id, flash{Kind: "ok", Message: "Runtime model references saved."})
 }
 
 func (s *Server) issueAgentToken(w http.ResponseWriter, r *http.Request) {

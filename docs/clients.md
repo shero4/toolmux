@@ -16,6 +16,10 @@ whole connection keeps newly discovered capabilities in sync automatically.
 Issue another token from the agent page when the same agent identity runs in a
 second place.
 
+Inference clients send an exact `provider/model` ID on every request. The
+agent page can record the runtime's primary and fallback selections for catalog
+visibility; this record does not override the model requested by the client.
+
 ## Client examples
 
 ### Codex

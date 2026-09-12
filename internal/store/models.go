@@ -37,10 +37,11 @@ type ProviderOptions struct {
 }
 
 type ProviderModel struct {
-	Model      string
-	Source     string
-	Enabled    bool
-	LastSeenAt *time.Time
+	Model        string
+	Source       string
+	Enabled      bool
+	LastSeenAt   *time.Time
+	ReferencedBy int
 }
 
 const providerColumns = `SELECT p.id,p.name,p.slug,p.base_url,p.adapter,p.enabled,p.timeout_seconds,p.last_checked_at,p.last_error,(SELECT count(*) FROM provider_models m WHERE m.provider_id=p.id AND m.enabled AND position('*' in m.model)=0),p.options FROM model_providers p`
@@ -154,7 +155,10 @@ func (s *Store) SaveModelProviderConfig(ctx context.Context, p ModelProvider, ke
 }
 
 func (s *Store) ProviderModels(ctx context.Context, id string) ([]ProviderModel, error) {
-	rows, err := s.pool.Query(ctx, `SELECT model,source,enabled,last_seen_at FROM provider_models WHERE provider_id::text=$1 ORDER BY model`, id)
+	rows, err := s.pool.Query(ctx, `SELECT m.model,m.source,m.enabled,m.last_seen_at,
+		(SELECT count(*) FROM agents a JOIN model_providers p ON p.id=m.provider_id
+		 WHERE a.primary_model=p.slug||'/'||m.model OR a.fallback_model=p.slug||'/'||m.model)
+		FROM provider_models m WHERE m.provider_id::text=$1 ORDER BY m.model`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -162,10 +166,38 @@ func (s *Store) ProviderModels(ctx context.Context, id string) ([]ProviderModel,
 	result := []ProviderModel{}
 	for rows.Next() {
 		var m ProviderModel
-		if err := rows.Scan(&m.Model, &m.Source, &m.Enabled, &m.LastSeenAt); err != nil {
+		if err := rows.Scan(&m.Model, &m.Source, &m.Enabled, &m.LastSeenAt, &m.ReferencedBy); err != nil {
 			return nil, err
 		}
 		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SetProviderModelEnabled(ctx context.Context, providerID, model string, enabled bool) error {
+	command, err := s.pool.Exec(ctx, `UPDATE provider_models SET enabled=$3 WHERE provider_id::text=$1 AND model=$2`, providerID, model, enabled)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) AgentsUsingModel(ctx context.Context, selected string) ([]Agent, error) {
+	rows, err := s.pool.Query(ctx, agentColumns+` WHERE a.primary_model=$1 OR a.fallback_model=$1 ORDER BY a.name`, selected)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Agent
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
 	}
 	return result, rows.Err()
 }

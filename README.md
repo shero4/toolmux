@@ -80,6 +80,10 @@ Model providers form a shared catalog available to active agent tokens; tool
 access is granted separately. For clients on another machine, use your gateway
 hostname instead of `localhost`.
 
+Each runtime sends its exact primary or fallback `provider/model` ID. Record
+those selections on the agent page too, so Toolmux can show which agents use a
+catalog entry and warn before an operator disables it.
+
 See [client setup](docs/clients.md) for examples and [model providers](MODEL_GATEWAY.md)
 for protocol and authentication options.
 
