@@ -2,54 +2,27 @@
 <header class="page-header">
   <div>
     <p class="crumbs"><a href="/agents">Agents</a> / Discover</p>
-    <h1>Discover installed agents</h1>
-    <p class="lede">Read-only scan of this computer's Hermes and OpenClaw configuration{{if $d.Found}}: {{$d.Found}} {{plural $d.Found "installation" "installations"}} found{{end}}. Nothing changes until you import.</p>
+    <h1>Discover agent profiles</h1>
+    <p class="lede">Find supported client configurations on the machine running Toolmux. Scanning does not change your files.</p>
   </div>
-  <div class="page-actions">
-    {{if $.CanManage}}<a class="btn" href="/agents/discover">Scan again</a>{{end}}
-    {{if $d.Hermes}}{{if $.CanManage}}<form method="post" action="/agents/import/hermes"><button class="btn btn-primary" type="submit">Import all Hermes profiles</button></form>{{end}}{{end}}
-  </div>
+  {{if .CanManage}}<div class="page-actions"><a class="btn" href="/agents/discover">Scan again</a><a class="btn btn-primary" href="/agents/new">Add agent manually</a></div>{{end}}
 </header>
-
 <section class="panel">
-  <header class="panel-header"><h2>Hermes profiles</h2><span>Import creates the agent, its connections and credentials, and points the profile at Toolmux. The original file is kept as <code>config.yaml.toolmux.bak</code>.</span></header>
-  {{if or $d.Hermes $d.Skipped}}
+  <header class="panel-header"><h2>Agent profiles</h2><span>{{if $d.Profiles}}{{len $d.Profiles}} {{plural (len $d.Profiles) "profile" "profiles"}} found{{else}}Local discovery{{end}}</span></header>
+  {{if $d.Profiles}}
   <table class="table">
-    <thead><tr><th>Profile</th><th>Environment</th><th>MCP servers</th><th>Configuration</th><th class="actions"></th></tr></thead>
-    <tbody>
-    {{range $d.Hermes}}<tr>
-      <td>{{.Profile.Candidate.Name}}{{if .Agent}}<span class="muted small block">Imported as <a href="/agents/{{.Agent.ID}}">{{.Agent.Name}}</a></span>{{end}}</td>
-      <td>{{.Profile.Candidate.Environment}}</td>
-      <td>{{if .Profile.Servers}}<ul class="plain">{{range .Profile.Servers}}<li><span class="mono">{{.Name}}</span> <span class="muted small">{{.Kind}}{{if not .Enabled}} · disabled{{else}} · {{.Authorization}}{{end}}</span></li>{{end}}</ul>{{else}}<span class="muted">None</span>{{end}}</td>
-      <td class="mono small muted">{{.Profile.Candidate.ConfigPath}}</td>
-      <td class="actions">{{if $.CanManage}}<form method="post" action="/agents/import"><input type="hidden" name="candidate_id" value="{{.Profile.Candidate.ID}}"><button class="btn btn-sm {{if not .Agent}}btn-primary{{end}}" type="submit">{{if .Agent}}Re-import{{else}}Import{{end}}</button></form>{{end}}</td>
-    </tr>{{end}}
-    {{range $d.Skipped}}<tr class="row-muted">
-      <td>{{.Candidate.Name}}</td>
+    <thead><tr><th>Profile</th><th>Client</th><th>Environment</th><th>Setup</th><th class="actions"></th></tr></thead>
+    <tbody>{{range $d.Profiles}}<tr>
+      <td>{{.Candidate.Name}}{{if .Agent}}<span class="muted small block">Linked to <a href="/agents/{{.Agent.ID}}">{{.Agent.Name}}</a></span>{{end}}<span class="mono small muted block">{{.Candidate.ConfigPath}}</span></td>
+      <td>{{runtime .Candidate.Runtime}}</td>
       <td>{{.Candidate.Environment}}</td>
-      <td colspan="2">{{.Reason}}</td>
-      <td class="actions"></td>
-    </tr>{{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <div class="empty">No Hermes profiles found in this user's standard Hermes directories. In a container, mount the host home and set <code>TOOLMUX_DISCOVERY_ROOTS</code>.</div>
-  {{end}}
-  {{if $d.GWS}}<div class="panel-foot muted">Google Workspace CLI identities on PATH: {{range $i, $g := $d.GWS}}{{if $i}}, {{end}}<span class="mono">{{$g.Name}}</span>{{end}}. Each becomes a command connection shared with every imported profile.</div>{{end}}
-</section>
-
-<section class="panel">
-  <header class="panel-header"><h2>OpenClaw, Codex and Claude Code</h2><span>Add an identity, then configure its Toolmux token in the client. Later rotations can update matching local references.</span></header>
-  {{if $d.OpenClaw}}
-  <table class="table">
-    <thead><tr><th>Agent</th><th>Environment</th><th>Configuration</th><th class="actions"></th></tr></thead>
-    <tbody>{{range $d.OpenClaw}}<tr>
-      <td>{{.Candidate.Name}}{{if .Agent}}<span class="muted small block">Added as <a href="/agents/{{.Agent.ID}}">{{.Agent.Name}}</a></span>{{end}}</td>
-      <td>{{.Candidate.Environment}}</td>
-      <td class="mono small muted">{{.Candidate.ConfigPath}}</td>
-      <td class="actions">{{if not .Agent}}{{if $.CanManage}}<form method="post" action="/agents/import"><input type="hidden" name="candidate_id" value="{{.Candidate.ID}}"><button class="btn btn-sm btn-primary" type="submit">Add agent</button></form>{{end}}{{end}}</td>
+      <td>{{if .Reason}}{{.Reason}}{{else if .CanImport}}Import connections and credentials, then update this profile to use Toolmux. The original configuration is backed up. Discovered Google Workspace CLI identities are also imported as shared connections.{{else}}Create an identity, then add the endpoint and token in your client.{{end}}</td>
+      <td class="actions">{{if $.CanManage}}{{if not .Reason}}{{if or .CanImport (not .Agent)}}<form method="post" action="/agents/import"><input type="hidden" name="candidate_id" value="{{.Candidate.ID}}"><button class="btn btn-sm" type="submit">{{if .CanImport}}{{if .Agent}}Re-import{{else}}Import profile{{end}}{{else}}Add agent{{end}}</button></form>{{end}}{{end}}{{end}}</td>
     </tr>{{end}}</tbody>
   </table>
-  {{else}}<div class="empty">No other supported local clients found.</div>{{end}}
+  {{else}}
+  <div class="empty"><p>No agent profiles found on this machine.</p><p>Add an agent manually to connect any compatible client, including clients running on another computer.</p></div>
+  {{end}}
+  <div class="panel-foot muted">Discovery checks supported local configuration locations. Clients on other machines are not scanned. In containers, host files must be mounted before they can be discovered.</div>
 </section>
 {{end}}

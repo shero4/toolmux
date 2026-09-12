@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/shero4/toolmux/internal/discovery"
@@ -42,21 +43,14 @@ func (f toolFilter) Active() bool {
 }
 
 type discoverPage struct {
-	Hermes   []hermesRow
-	Skipped  []importer.Skipped
-	GWS      []importer.GWSConnection
-	OpenClaw []candidateRow
-	Found    int
+	Profiles []profileRow
 }
 
-type hermesRow struct {
-	Profile importer.Profile
-	Agent   *store.Agent
-}
-
-type candidateRow struct {
+type profileRow struct {
 	Candidate discovery.Candidate
 	Agent     *store.Agent
+	CanImport bool
+	Reason    string
 }
 
 type setupGuide struct {
@@ -173,24 +167,26 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 			bySource[agent.SourceKey] = agent
 		}
 	}
-	page := discoverPage{Skipped: inventory.Skipped, GWS: inventory.GWS, Found: len(candidates)}
+	page := discoverPage{}
+	importable := make(map[string]bool)
 	for _, profile := range inventory.Profiles {
-		row := hermesRow{Profile: profile}
-		if agent, ok := bySource[profile.Candidate.ID]; ok {
-			row.Agent = &agent
-		}
-		page.Hermes = append(page.Hermes, row)
+		importable[profile.Candidate.ID] = true
+	}
+	skipped := make(map[string]string)
+	for _, item := range inventory.Skipped {
+		skipped[item.Candidate.ID] = item.Reason
 	}
 	for _, candidate := range candidates {
-		if candidate.Runtime == "hermes" {
-			continue
-		}
-		row := candidateRow{Candidate: candidate}
+		row := profileRow{Candidate: candidate, CanImport: importable[candidate.ID], Reason: skipped[candidate.ID]}
 		if agent, ok := bySource[candidate.ID]; ok {
 			row.Agent = &agent
 		}
-		page.OpenClaw = append(page.OpenClaw, row)
+		page.Profiles = append(page.Profiles, row)
 	}
+	sort.SliceStable(page.Profiles, func(i, j int) bool {
+		return strings.ToLower(page.Profiles[i].Candidate.Name) < strings.ToLower(page.Profiles[j].Candidate.Name)
+	})
+
 	s.render(w, r, http.StatusOK, "discover", "agents", "Discover agents", page)
 }
 
