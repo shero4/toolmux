@@ -54,8 +54,16 @@ print(json.dumps({'models':list(dict.fromkeys(models))}))
 // Models returns the concrete model IDs visible to the authenticated Codex
 // subscription. The access and refresh tokens never leave the bridge volume.
 func (c *Codex) Models(ctx context.Context) ([]string, error) {
-	if !c.work.TryLock() {
-		return nil, errors.New("Codex authorization is busy; try again shortly")
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for !c.work.TryLock() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline.C:
+			return nil, errors.New("Codex authorization is busy; try again shortly")
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	defer c.work.Unlock()
 	check, cancel := context.WithTimeout(ctx, 25*time.Second)
