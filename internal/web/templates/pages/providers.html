@@ -1,0 +1,9 @@
+{{define "content"}}
+<header class="page-header"><div><h1>Model providers</h1><p class="lede">A shared inference endpoint. Your agent chooses the model; Toolmux keeps provider credentials and call history in one place.</p></div>{{if $.CanManage}}<a class="btn btn-primary" href="/providers/new">Add provider</a>{{end}}</header>
+<p class="access-notice"><a href="/auth/codex">Codex account and sign-in status</a>: <span data-codex-summary aria-live="polite">Checking…</span> · <a href="/operations">Authorization checks</a></p>
+<div class="panel"><div class="panel-body"><h2>Connect your agent</h2><p class="muted">OpenAI base URL: <code>{{.BaseURL}}/v1</code> · Anthropic base URL: <code>{{.BaseURL}}</code>. Use a Toolmux agent token as the API key for either.</p><p class="muted">The model list contains <code>provider/model</code> IDs from every enabled provider. Select the model in Hermes, OpenClaw, or your client. Tools and inference share an agent identity.</p></div></div>
+<p class="muted">Need cloud identity, protocol translation, or ChatGPT/Codex device sign-in? <a href="/providers/guide">Provider setup guide</a></p>
+{{if .Data.Providers}}<div class="panel"><table class="table"><thead><tr><th>Provider</th><th>Protocol</th><th>Status</th><th>Models</th><th>Last discovery</th></tr></thead><tbody>
+{{range .Data.Providers}}<tr><td><a href="/providers/{{.ID}}">{{.Name}}</a><span class="muted small block">{{.Slug}}/</span></td><td>{{.Adapter}}</td><td>{{if .Enabled}}<span class="badge badge-ok">Enabled</span>{{else}}<span class="badge badge-muted">Paused</span>{{end}}</td><td>{{.ModelCount}}</td><td>{{if .LastError}}<span class="muted">{{.LastError}}</span>{{else if .LastCheckedAt}}{{time .LastCheckedAt}}{{else}}Not checked{{end}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<div class="panel empty">No model providers yet. Add an API base URL and key to get started.</div>{{end}}
+{{end}}

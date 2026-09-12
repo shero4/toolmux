@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <title>Toolmux</title>
-  <text x="32" y="51" font-size="52" text-anchor="middle">🪼</text>
+  <rect x="2" y="2" width="28" height="28" rx="7" fill="#1a1d22"/>
+  <path d="M9.5 11h13M16 11v11.5" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"/>
 </svg>

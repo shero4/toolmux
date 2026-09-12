@@ -1,12 +1,11 @@
-.PHONY: css test run
+.PHONY: build test run
 
-css:
-	npm run build:css
+build:
+	go build -o toolmux ./cmd/toolmux
 
 test:
-	npm run build:css
+	go vet ./...
 	go test ./...
 
 run:
-	npm run build:css
 	go run ./cmd/toolmux

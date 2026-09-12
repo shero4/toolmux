@@ -28,7 +28,19 @@ type Router struct {
 }
 
 func New(store *store.Store, mcpClient *mcp.Client) *Router {
-	return &Router{store: store, mcp: mcpClient, http: &http.Client{}}
+	return &Router{store: store, mcp: mcpClient, http: &http.Client{CheckRedirect: sameHostRedirect}}
+}
+
+// sameHostRedirect follows redirects only within the original host so a
+// connection credential is never replayed to a third party.
+func sameHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if req.URL.Host != via[0].URL.Host {
+		return errors.New("refusing to follow a redirect to a different host")
+	}
+	return nil
 }
 
 func (r *Router) Call(ctx context.Context, tool store.Tool, connection store.Connection, credential store.Credential, call store.ToolCall) (json.RawMessage, error) {
@@ -194,6 +206,7 @@ func (r *Router) callCommand(ctx context.Context, tool store.Tool, credential st
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(spec.TimeoutMS)*time.Millisecond)
 	defer cancel()
 	cmd := exec.CommandContext(callCtx, spec.Executable, rendered...)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = spec.WorkingDirectory
 	cmd.Env = os.Environ()
 	if spec.CredentialEnv != "" && credential.Bearer() != "" {
@@ -268,7 +281,7 @@ func (r *Router) checkCommand(ctx context.Context, connection store.Connection) 
 
 func applyCredential(req *http.Request, connection store.Connection, credential store.Credential) {
 	token := credential.Bearer()
-	if token == "" {
+	if token == "" || connection.AuthMethod == "none" {
 		return
 	}
 	if connection.AuthMethod == "header" {

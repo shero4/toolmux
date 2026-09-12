@@ -1,0 +1,45 @@
+{{define "content"}}{{$d := .Data}}
+<header class="page-header">
+  <div>
+    <h1>Tools</h1>
+    <p class="lede">Everything agents can be granted. MCP tools are discovered from their servers; HTTP and command tools are defined here.</p>
+  </div>
+  <div class="page-actions">
+    {{if $.CanManage}}<a class="btn btn-primary" href="/tools/new">Define tool</a>{{end}}
+  </div>
+</header>
+
+<form class="filters" method="get" action="/tools">
+  <input type="search" name="q" value="{{$d.Filter.Query}}" placeholder="Search tools" aria-label="Search tools">
+  <select name="kind" aria-label="Type">
+    <option value="">All types</option>
+    <option value="mcp" {{if eq $d.Filter.Kind "mcp"}}selected{{end}}>MCP</option>
+    <option value="http" {{if eq $d.Filter.Kind "http"}}selected{{end}}>HTTP</option>
+    <option value="command" {{if eq $d.Filter.Kind "command"}}selected{{end}}>Command</option>
+  </select>
+  <select name="connection" aria-label="Connection">
+    <option value="">All connections</option>
+    {{range $d.Connections}}<option value="{{.ID}}" {{if eq $d.Filter.ConnectionID .ID}}selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  <button class="btn" type="submit">Filter</button>
+  {{if $d.Filter.Active}}<a class="btn btn-ghost" href="/tools">Clear</a>{{end}}
+</form>
+
+{{if $d.Tools}}
+<div class="panel">
+  <table class="table">
+    <thead><tr><th>Tool</th><th>Connection</th><th>Type</th><th class="num">Agents</th><th>Description</th></tr></thead>
+    <tbody>{{range $d.Tools}}<tr>
+      <td><a class="mono" href="/tools/{{.ID}}">{{.ExposedName}}</a></td>
+      <td><a href="/connections/{{.ConnectionID}}">{{.ConnectionName}}</a></td>
+      <td class="nowrap">{{kind .Kind}}</td>
+      <td class="num">{{.AgentCount}}</td>
+      <td class="muted">{{short .Description}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+  {{template "pager" $d.Pager}}
+</div>
+{{else}}
+<div class="panel empty">{{if $d.Filter.Active}}No tools match these filters.{{else}}No tools yet. Check a connection to discover its tools, or {{if $.CanManage}}<a href="/tools/new">define one</a>{{end}}.{{end}}</div>
+{{end}}
+{{end}}

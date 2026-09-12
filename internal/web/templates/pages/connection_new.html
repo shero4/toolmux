@@ -1,0 +1,112 @@
+{{define "content"}}{{$f := .Data}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/connections">Connections</a> / New</p>
+    <h1>New connection</h1>
+    <p class="lede">Register an upstream once. Its tools are discovered or defined afterwards.</p>
+  </div>
+</header>
+
+<form class="form panel narrow" method="post" action="/connections" autocomplete="off">
+  {{if $f.Error}}<div class="alert alert-error"><p>{{$f.Error}}</p></div>{{end}}
+  <fieldset class="panel-body">
+    <legend>Identity</legend>
+    <div class="field-row">
+      <div class="field">
+        <label for="connector_name">Connector</label>
+        <input id="connector_name" name="connector_name" value="{{$f.ConnectorName}}" required placeholder="Stripe">
+        <p class="hint">The service or product.</p>
+      </div>
+      <div class="field">
+        <label for="name">Connection name</label>
+        <input id="name" name="name" value="{{$f.Name}}" required placeholder="Finance workspace">
+        <p class="hint">The account or environment on it.</p>
+      </div>
+    </div>
+    <div class="field">
+      <label for="kind">Type</label>
+      <select id="kind" name="kind" data-controls="kind">
+        <option value="mcp_http" {{if eq $f.Kind "mcp_http"}}selected{{end}}>Remote MCP server (Streamable HTTP)</option>
+        <option value="http_api" {{if eq $f.Kind "http_api"}}selected{{end}}>HTTP API</option>
+        <option value="command" {{if eq $f.Kind "command"}}selected{{end}}>Installed command</option>
+      </select>
+      <p class="hint" data-when="kind:mcp_http">Tools are discovered from the server on every check.</p>
+      <p class="hint" data-when="kind:http_api">Define each permitted request on the Tools page after creating the connection.</p>
+      <p class="hint" data-when="kind:command">Define each permitted command on the Tools page. The host's PATH and environment are used.</p>
+    </div>
+    <div class="field" data-when="kind:mcp_http,http_api">
+      <label for="endpoint_url">Endpoint URL</label>
+      <input id="endpoint_url" name="endpoint_url" type="url" value="{{$f.EndpointURL}}" placeholder="https://api.example.com">
+    </div>
+    <div class="field" data-when="kind:http_api">
+      <label for="health_path">Health path <span class="hint">optional</span></label>
+      <input id="health_path" name="health_path" value="{{$f.HealthPath}}" placeholder="/health">
+      <p class="hint">Checked with a HEAD request. Defaults to the endpoint root.</p>
+    </div>
+  </fieldset>
+
+  <fieldset class="panel-body">
+    <legend>Authorization</legend>
+    <div class="field">
+      <label for="auth_method">Method</label>
+      <select id="auth_method" name="auth_method" data-controls="auth">
+        <option value="none" {{if eq $f.AuthMethod "none"}}selected{{end}}>None, use the host environment</option>
+        <option value="bearer" {{if eq $f.AuthMethod "bearer"}}selected{{end}}>Bearer token</option>
+        <option value="header" {{if eq $f.AuthMethod "header"}}selected{{end}}>API key header</option>
+        <option value="oauth2" {{if eq $f.AuthMethod "oauth2"}}selected{{end}}>OAuth 2.0 (authorization code with PKCE)</option>
+      </select>
+    </div>
+    <div class="field" data-when="auth:header">
+      <label for="auth_name">Header name</label>
+      <input id="auth_name" name="auth_name" value="{{$f.AuthName}}" placeholder="X-API-Key">
+    </div>
+    <div class="field" data-when="auth:bearer,header,oauth2">
+      <label for="secret">Credential</label>
+      <input id="secret" name="secret" type="password" autocomplete="new-password">
+      <p class="hint" data-when="auth:bearer,header">The token or key. Stored encrypted; never shown again or sent to agents.</p>
+      <p class="hint" data-when="auth:oauth2">The client secret, if the provider issued one. Stored encrypted.</p>
+    </div>
+    <div data-when="auth:oauth2">
+      <div class="field-row">
+        <div class="field"><label for="authorization_url">Authorization URL</label><input id="authorization_url" name="authorization_url" type="url" value="{{$f.AuthorizationURL}}"></div>
+        <div class="field"><label for="token_url">Token URL</label><input id="token_url" name="token_url" type="url" value="{{$f.TokenURL}}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="client_id">Client ID</label><input id="client_id" name="client_id" value="{{$f.ClientID}}"></div>
+        <div class="field">
+          <label for="token_auth_method">Client authentication</label>
+          <select id="token_auth_method" name="token_auth_method">
+            <option value="client_secret_basic" {{if eq $f.TokenAuthMethod "client_secret_basic"}}selected{{end}}>HTTP Basic</option>
+            <option value="client_secret_post" {{if eq $f.TokenAuthMethod "client_secret_post"}}selected{{end}}>Request body</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="scopes">Scopes <span class="hint">optional</span></label>
+        <input id="scopes" name="scopes" value="{{$f.Scopes}}" placeholder="read write">
+        <p class="hint">Register <code>{{$.BaseURL}}/oauth/callback</code> as the redirect URL with the provider.</p>
+      </div>
+    </div>
+  </fieldset>
+
+  <details class="panel-body">
+    <summary>Advanced</summary>
+    <div class="field-row">
+      <div class="field">
+        <label for="connector_slug">Connector slug</label>
+        <input id="connector_slug" name="connector_slug" value="{{$f.ConnectorSlug}}" pattern="[a-z0-9][a-z0-9-]*" placeholder="stripe">
+      </div>
+      <div class="field">
+        <label for="connection_slug">Connection slug</label>
+        <input id="connection_slug" name="connection_slug" value="{{$f.Slug}}" pattern="[a-z0-9][a-z0-9-]*" placeholder="finance-workspace">
+        <p class="hint">Prefixes exposed tool names as <span class="mono">slug__tool</span>. Derived from the name when blank.</p>
+      </div>
+    </div>
+  </details>
+
+  <div class="panel-foot form-actions">
+    <button class="btn btn-primary" type="submit">Create and check</button>
+    <a class="btn btn-ghost" href="/connections">Cancel</a>
+  </div>
+</form>
+{{end}}

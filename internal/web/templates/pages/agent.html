@@ -1,0 +1,116 @@
+{{define "content"}}{{$d := .Data}}{{$a := $d.Agent}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/agents">Agents</a> / {{$a.Slug}}</p>
+    <h1>{{$a.Name}} <span class="badge badge-{{badge $a.Status}}">{{status $a.Status}}</span></h1>
+    <p class="lede">{{if $a.Runtime}}{{runtime $a.Runtime}} · {{$a.Profile}} · {{$a.Environment}}{{if $a.ConfigPath}} · <code>{{$a.ConfigPath}}</code>{{end}}{{else}}Manually created.{{end}} Created {{time $a.CreatedAt}}.</p>
+  </div>
+</header>
+
+<section class="panel">
+  <header class="panel-header"><h2>Tokens</h2><span>Endpoint <code>{{$.Endpoint}}</code></span></header>
+  {{if $d.Tokens}}
+  <table class="table">
+    <thead><tr><th>Label</th><th>Prefix</th><th>Created</th><th>Last used</th><th class="actions"></th></tr></thead>
+    <tbody>{{range $d.Tokens}}<tr>
+      <td>{{.Label}}</td>
+      <td class="mono muted">{{.Prefix}}…</td>
+      <td class="muted nowrap">{{time .CreatedAt}}</td>
+      <td class="muted nowrap">{{date .LastUsedAt}}</td>
+      <td class="actions">{{if $.CanManage}}<a class="btn btn-sm" data-rotate-dialog href="/agents/{{$a.ID}}/tokens/{{.ID}}/rotate">Rotate</a><form method="post" action="/agents/{{$a.ID}}/tokens/{{.ID}}/revoke" data-confirm="Revoke this token? Clients using it stop working immediately."><button class="btn btn-sm btn-danger" type="submit">Revoke</button></form>{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+  {{else}}
+  <div class="empty">No active tokens.{{if eq $a.Status "active"}} Issue one below.{{else}} Enable the agent to issue tokens.{{end}}</div>
+  {{end}}
+  {{if eq $a.Status "active"}}
+  {{if $.CanManage}}<form class="panel-foot inline-form" method="post" action="/agents/{{$a.ID}}/tokens">
+    <input name="label" maxlength="80" placeholder="Label, e.g. laptop or ci" aria-label="Token label">
+    <button class="btn" type="submit">Issue token</button>
+  </form>{{end}}
+  {{end}}
+</section>
+
+<section class="panel">
+  <header class="panel-header"><h2>Connections</h2><span>Assigning a connection grants all of its tools, including ones discovered later.</span></header>
+  {{if $d.Connections}}
+  <table class="table">
+    <thead><tr><th>Connection</th><th>Type</th><th>Status</th><th class="num">Granted</th><th class="actions"></th></tr></thead>
+    <tbody>{{range $d.Connections}}<tr>
+      <td><a href="/connections/{{.ID}}">{{.Name}}</a></td>
+      <td class="nowrap">{{kind .Kind}}</td>
+      <td><span class="badge badge-{{badge .Status}}">{{status .Status}}</span></td>
+      <td class="num nowrap">{{.GrantedCount}} / {{.ToolCount}}</td>
+      <td class="actions">{{if $.CanManage}}<form method="post" action="/agents/{{$a.ID}}/connections/{{.ID}}"><input type="hidden" name="enabled" value="{{if .Assigned}}false{{else}}true{{end}}"><button class="btn btn-sm {{if not .Assigned}}btn-primary{{end}}" type="submit">{{if .Assigned}}Remove{{else}}Assign{{end}}</button></form>{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+  {{else}}<div class="empty">No connections yet. {{if $.CanManage}}<a href="/connections/new">Add one</a>{{end}} first.</div>{{end}}
+</section>
+
+<section class="panel">
+  <header class="panel-header"><h2>Tools</h2><span>Individual grants. Changes save immediately.</span></header>
+  <form class="filters" method="get" action="/agents/{{$a.ID}}">
+    <input type="search" name="q" value="{{$d.Filter.Query}}" placeholder="Search tools" aria-label="Search tools">
+    <select name="granted" aria-label="Access">
+      <option value="">All tools</option>
+      <option value="yes" {{if eq $d.Filter.Granted "yes"}}selected{{end}}>Granted</option>
+      <option value="no" {{if eq $d.Filter.Granted "no"}}selected{{end}}>Not granted</option>
+    </select>
+    <select name="kind" aria-label="Type">
+      <option value="">All types</option>
+      <option value="mcp" {{if eq $d.Filter.Kind "mcp"}}selected{{end}}>MCP</option>
+      <option value="http" {{if eq $d.Filter.Kind "http"}}selected{{end}}>HTTP</option>
+      <option value="command" {{if eq $d.Filter.Kind "command"}}selected{{end}}>Command</option>
+    </select>
+    <select name="connection" aria-label="Connection">
+      <option value="">All connections</option>
+      {{range $d.Connections}}<option value="{{.ID}}" {{if eq $d.Filter.ConnectionID .ID}}selected{{end}}>{{.Name}}</option>{{end}}
+    </select>
+    <button class="btn" type="submit">Filter</button>
+    {{if $d.Filter.Active}}<a class="btn btn-ghost" href="/agents/{{$a.ID}}">Clear</a>{{end}}
+  </form>
+  {{if $d.Tools}}
+  <form method="post" action="/agents/{{$a.ID}}/grants" data-grants>
+    <input type="hidden" name="return_url" value="{{$.ReturnURL}}">
+    <table class="table table-select">
+      <thead><tr>
+        <th class="check"><input type="checkbox" {{if not $.CanManage}}disabled{{end}} data-grant-all aria-label="Toggle every tool on this page"></th>
+        <th>Tool</th><th>Connection</th><th>Type</th><th>Description</th>
+      </tr></thead>
+      <tbody>{{range $d.Tools}}<tr data-grant-row {{if .Granted}}class="is-granted"{{end}}>
+        <td class="check"><input type="hidden" name="visible_tool_id" value="{{.ID}}"><input type="checkbox" name="tool_id" value="{{.ID}}" {{if .Granted}}checked{{end}} {{if not $.CanManage}}disabled{{end}} data-grant aria-label="Grant {{.ExposedName}}"></td>
+        <td><a class="mono" href="/tools/{{.ID}}">{{.ExposedName}}</a></td>
+        <td><a href="/connections/{{.ConnectionID}}">{{.ConnectionName}}</a></td>
+        <td class="nowrap">{{kind .Kind}}</td>
+        <td class="muted">{{short .Description}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+    {{if $.CanManage}}<div class="panel-foot form-actions" data-grants-fallback>
+      <button class="btn btn-primary" type="submit">Save access for listed tools</button>
+      <span class="muted">{{len $d.Tools}} on this page</span>
+    </div>{{end}}
+  </form>
+  {{template "pager" $d.Pager}}
+  {{else}}
+  <div class="empty">{{if $d.Filter.Active}}No tools match these filters.{{else}}No tools available yet. Check a connection to discover its tools.{{end}}</div>
+  {{end}}
+</section>
+
+<section class="panel panel-danger">
+  <header class="panel-header"><h2>Danger zone</h2></header>
+  <div class="panel-body danger-actions">
+    <div>
+      <strong>{{if eq $a.Status "active"}}Disable agent{{else}}Enable agent{{end}}</strong>
+      <p class="muted">{{if eq $a.Status "active"}}Revokes every token. Grants are kept for when it is enabled again.{{else}}Restores access. Previous tokens stay revoked, so issue a new one afterwards.{{end}}</p>
+    </div>
+    {{if $.CanManage}}<form method="post" action="/agents/{{$a.ID}}/{{if eq $a.Status "active"}}disable{{else}}enable{{end}}"><button class="btn" type="submit">{{if eq $a.Status "active"}}Disable{{else}}Enable{{end}}</button></form>{{end}}
+  </div>
+  <div class="panel-body danger-actions">
+    <div>
+      <strong>Delete agent</strong>
+      <p class="muted">Removes the identity, its tokens, and grants.{{if eq $a.Runtime "hermes"}} The Toolmux entry is removed from its Hermes profile.{{end}} Audit events keep their record.</p>
+    </div>
+    {{if $.CanManage}}<form method="post" action="/agents/{{$a.ID}}/delete" data-confirm="Delete {{$a.Name}}? This cannot be undone."><button class="btn btn-danger" type="submit">Delete</button></form>{{end}}
+  </div>
+</section>
+{{end}}

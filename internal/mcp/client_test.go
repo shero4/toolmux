@@ -105,12 +105,28 @@ func TestDecodeLargeServerSentEvent(t *testing.T) {
 		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:   io.NopCloser(strings.NewReader(payload)),
 	}
-	decoded, err := decodeResponse(resp)
+	decoded, err := decodeResponse(resp, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(decoded.Result) < 128<<10 {
 		t.Fatalf("result was truncated: %d bytes", len(decoded.Result))
+	}
+}
+
+func TestDecodeServerSentEventSkipsNotifications(t *testing.T) {
+	payload := "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\ndata: \"result\":{\"ok\":true}}\n\n"
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader(payload)),
+	}
+	decoded, err := decodeResponse(resp, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded.Result) != `{"ok":true}` {
+		t.Fatalf("unexpected result: %s", decoded.Result)
 	}
 }
 

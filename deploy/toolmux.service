@@ -1,0 +1,23 @@
+[Unit]
+Description=Toolmux tool and inference gateway
+Requires=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=toolmux
+Group=toolmux
+SupplementaryGroups=docker
+WorkingDirectory=/opt/toolmux
+EnvironmentFile=/etc/toolmux/toolmux.env
+Environment=HOME=/var/lib/toolmux
+ExecStart=/usr/local/bin/toolmux
+Restart=always
+RestartSec=5
+UMask=0077
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

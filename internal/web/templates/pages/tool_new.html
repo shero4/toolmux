@@ -1,0 +1,137 @@
+{{define "content"}}{{$f := .Data}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/tools">Tools</a> / New</p>
+    <h1>Define tool</h1>
+    <p class="lede">Describe one operation an agent may call. Templates reference call inputs as <span class="mono">${name}</span>.</p>
+  </div>
+</header>
+
+{{if $f.Connections}}
+<form class="form panel" method="post" action="/tools" autocomplete="off">
+  {{if $f.Error}}<div class="alert alert-error"><p>{{$f.Error}}</p></div>{{end}}
+  <fieldset class="panel-body">
+    <legend>Tool</legend>
+    <div class="field-row">
+      <div class="field">
+        <label for="kind">Type</label>
+        <select id="kind" name="kind" data-controls="tool">
+          <option value="http" {{if eq $f.Kind "http"}}selected{{end}}>HTTP request</option>
+          <option value="command" {{if eq $f.Kind "command"}}selected{{end}}>Command</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="connection_id">Connection</label>
+        <select id="connection_id" name="connection_id" required data-filter-by="tool">
+          <option value="">Choose…</option>
+          {{range $f.Connections}}<option value="{{.ID}}" data-kind="{{if eq .Kind "http_api"}}http{{else}}command{{end}}" {{if eq $f.ConnectionID .ID}}selected{{end}}>{{.Name}} · {{kind .Kind}}</option>{{end}}
+        </select>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" value="{{$f.Name}}" required pattern="[A-Za-z0-9_-]+" placeholder="create_invoice">
+        <p class="hint">Exposed to agents as <span class="mono">connection__name</span>.</p>
+      </div>
+      <div class="field">
+        <label for="title">Title <span class="hint">optional</span></label>
+        <input id="title" name="title" value="{{$f.Title}}" placeholder="Create invoice">
+      </div>
+    </div>
+    <div class="field">
+      <label for="description">Description</label>
+      <textarea id="description" name="description" rows="2" placeholder="What the tool does and when an agent should use it.">{{$f.Description}}</textarea>
+    </div>
+    <div class="field">
+      <label for="input_schema">Input schema <span class="hint">JSON Schema object</span></label>
+      <textarea id="input_schema" name="input_schema" class="code" rows="6" required>{{$f.InputSchema}}</textarea>
+    </div>
+  </fieldset>
+
+  <fieldset class="panel-body" data-when="tool:http">
+    <legend>HTTP request</legend>
+    <div class="field-row field-row-narrow-first">
+      <div class="field">
+        <label for="method">Method</label>
+        <select id="method" name="method">
+          <option {{if eq $f.Method "GET"}}selected{{end}}>GET</option>
+          <option {{if eq $f.Method "POST"}}selected{{end}}>POST</option>
+          <option {{if eq $f.Method "PUT"}}selected{{end}}>PUT</option>
+          <option {{if eq $f.Method "PATCH"}}selected{{end}}>PATCH</option>
+          <option {{if eq $f.Method "DELETE"}}selected{{end}}>DELETE</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="url_template">URL or path</label>
+        <input id="url_template" name="url_template" value="{{$f.URLTemplate}}" class="code" placeholder="/v1/customers/${customer_id}">
+        <p class="hint">Relative to the connection endpoint, or a complete URL.</p>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="query_template">Query <span class="hint">JSON string map</span></label>
+        <textarea id="query_template" name="query_template" class="code" rows="3">{{$f.QueryTemplate}}</textarea>
+      </div>
+      <div class="field">
+        <label for="headers_template">Headers <span class="hint">JSON string map</span></label>
+        <textarea id="headers_template" name="headers_template" class="code" rows="3">{{$f.HeadersTemplate}}</textarea>
+      </div>
+    </div>
+    <div class="field">
+      <label for="body_template">Body <span class="hint">JSON, or blank for none</span></label>
+      <textarea id="body_template" name="body_template" class="code" rows="4">{{$f.BodyTemplate}}</textarea>
+      <p class="hint">A string that is exactly <span class="mono">${name}</span> keeps the input's JSON type.</p>
+    </div>
+    <div class="field field-narrow">
+      <label for="http_timeout_seconds">Timeout <span class="hint">seconds, up to 3600</span></label>
+      <input id="http_timeout_seconds" name="http_timeout_seconds" type="number" min="1" max="3600" value="{{$f.HTTPTimeout}}">
+    </div>
+  </fieldset>
+
+  <fieldset class="panel-body" data-when="tool:command">
+    <legend>Command</legend>
+    <div class="field-row">
+      <div class="field">
+        <label for="executable">Executable</label>
+        <input id="executable" name="executable" value="{{$f.Executable}}" class="code" placeholder="gh">
+        <p class="hint">Resolved on the host's PATH. No shell is used.</p>
+      </div>
+      <div class="field">
+        <label for="working_directory">Working directory <span class="hint">optional</span></label>
+        <input id="working_directory" name="working_directory" value="{{$f.WorkingDirectory}}" class="code">
+      </div>
+    </div>
+    <div class="field">
+      <label for="args_template">Arguments <span class="hint">JSON array of strings</span></label>
+      <textarea id="args_template" name="args_template" class="code" rows="3">{{$f.ArgsTemplate}}</textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="stdin_mode">Standard input</label>
+        <select id="stdin_mode" name="stdin_mode">
+          <option value="none" {{if eq $f.StdinMode "none"}}selected{{end}}>Nothing</option>
+          <option value="json" {{if eq $f.StdinMode "json"}}selected{{end}}>The call arguments as JSON</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="credential_env">Credential variable <span class="hint">optional</span></label>
+        <input id="credential_env" name="credential_env" value="{{$f.CredentialEnv}}" class="code" pattern="[A-Z_][A-Z0-9_]*" placeholder="GITHUB_TOKEN">
+        <p class="hint">Receives the connection's credential, if one is stored.</p>
+      </div>
+    </div>
+    <div class="field field-narrow">
+      <label for="command_timeout_seconds">Timeout <span class="hint">seconds, up to 3600</span></label>
+      <input id="command_timeout_seconds" name="command_timeout_seconds" type="number" min="1" max="3600" value="{{$f.CommandTimeout}}">
+    </div>
+  </fieldset>
+
+  <div class="panel-foot form-actions">
+    <button class="btn btn-primary" type="submit">Create tool</button>
+    <a class="btn btn-ghost" href="/tools">Cancel</a>
+  </div>
+</form>
+{{else}}
+<div class="panel empty">Defined tools need an HTTP API or installed-command connection. <a href="/connections/new">Create one first</a>.</div>
+{{end}}
+{{end}}

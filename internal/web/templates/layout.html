@@ -1,0 +1,52 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{.Title}} · Toolmux</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css?v={{.AssetVersion}}">
+  <script src="/static/app.js?v={{.AssetVersion}}" defer></script>
+</head>
+<body>
+<div class="{{if eq .Nav "auth"}}auth-shell{{else}}shell{{end}}">
+  {{if ne .Nav "auth"}}
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Toolmux overview">{{template "icon-brand"}}<span>Toolmux</span></a>
+    <nav class="nav" aria-label="Primary">
+      <a href="/" {{if eq .Nav "overview"}}aria-current="page"{{end}}>{{template "icon-overview"}}<span>Overview</span></a>
+      <a href="/agents" {{if eq .Nav "agents"}}aria-current="page"{{end}}>{{template "icon-agents"}}<span>Agents</span></a>
+      <a href="/connections" {{if eq .Nav "connections"}}aria-current="page"{{end}}>{{template "icon-connections"}}<span>Connections</span></a>
+      <a href="/tools" {{if eq .Nav "tools"}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Tools</span></a>
+      <a href="/activity" {{if eq .Nav "activity"}}aria-current="page"{{end}}>{{template "icon-activity"}}<span>Activity</span></a>
+      <a href="/providers" {{if eq .Nav "providers"}}aria-current="page"{{end}}>{{template "icon-connections"}}<span>Models</span></a>
+      <a href="/settings" {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations")}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Administration</span></a>
+      <a href="/docs" {{if eq .Nav "docs"}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Docs</span></a>
+
+    </nav>
+    <div class="sidebar-foot">
+      <p>{{.User.Username}} · {{.User.Role}}</p>
+      <span>Agent endpoint</span>
+      <code>{{.Endpoint}}</code>
+      <form action="/logout" method="post"><button class="btn btn-ghost" type="submit">Sign out</button></form>
+    </div>
+  </aside>
+  {{end}}
+  <main class="main">
+    {{if and (ne .Nav "auth") (not .CanManage)}}<p class="access-notice">Signed in as {{.User.Username}} · Viewer · Read-only access</p>{{end}}
+    {{with .Flash}}{{template "flash" .}}{{end}}
+    {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations")}}
+    <nav class="admin-tabs" aria-label="Administration">
+      <a href="/settings" {{if eq .Nav "settings"}}aria-current="page"{{end}}>Settings</a>
+      {{if .IsAdmin}}<a href="/users" {{if eq .Nav "users"}}aria-current="page"{{end}}>Users and roles</a>{{end}}
+      <a href="/operations" {{if eq .Nav "operations"}}aria-current="page"{{end}}>Operational logs</a>
+    </nav>
+    {{end}}
+    {{template "content" .}}
+    {{if ne .Nav "auth"}}<footer class="mobile-account"><span>{{.User.Username}} · {{.User.Role}}</span><form action="/logout" method="post"><button class="btn btn-ghost" type="submit">Sign out</button></form></footer>{{end}}
+  </main>
+</div>
+</body>
+</html>
+{{end}}

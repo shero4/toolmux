@@ -1,3 +1,5 @@
+// Package oauth runs Authorization Code + PKCE flows for upstream connections
+// and refreshes access tokens before they expire.
 package oauth
 
 import (
@@ -12,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shero4/toolmux/internal/store"
@@ -29,15 +32,18 @@ type repository interface {
 }
 
 type Manager struct {
-	store   repository
-	baseURL string
-	http    *http.Client
+	store      repository
+	baseURL    string
+	http       *http.Client
+	refreshing sync.Map // connection ID -> *sync.Mutex
 }
 
 func New(store repository, baseURL string) *Manager {
 	return &Manager{store: store, baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 15 * time.Second}}
 }
 
+// Start prepares an authorization request and returns the provider URL to
+// redirect the operator to.
 func (m *Manager) Start(ctx context.Context, connectionID string) (string, error) {
 	config, err := m.store.GetOAuthConfig(ctx, connectionID)
 	if err != nil {
@@ -136,6 +142,7 @@ func (m *Manager) register(ctx context.Context, registrationURL, redirectURI str
 	return client, nil
 }
 
+// Complete exchanges the callback code for tokens and stores them.
 func (m *Manager) Complete(ctx context.Context, stateValue, code string) (string, error) {
 	connectionID, verifier, err := m.store.ConsumeOAuthState(ctx, stateValue)
 	if err != nil {
@@ -157,21 +164,31 @@ func (m *Manager) Complete(ctx context.Context, stateValue, code string) (string
 	credential.AccessToken = response.AccessToken
 	credential.TokenType = response.TokenType
 	credential.RefreshToken = response.RefreshToken
-	if response.ExpiresIn > 0 {
-		expires := time.Now().Add(time.Duration(response.ExpiresIn) * time.Second)
-		credential.ExpiresAt = &expires
-	}
+	credential.ExpiresAt = expiry(response.ExpiresIn)
 	if err := m.store.SaveCredential(ctx, connectionID, credential); err != nil {
 		return "", err
 	}
 	return connectionID, nil
 }
 
+// Resolve returns a credential that is valid for the next minute, refreshing
+// it first when needed. Refreshes for one connection are serialized so
+// concurrent calls never spend the same refresh token twice.
 func (m *Manager) Resolve(ctx context.Context, connection store.Connection, credential store.Credential) (store.Credential, error) {
-	if connection.AuthMethod != "oauth2" {
+	if connection.AuthMethod != "oauth2" || fresh(credential) {
 		return credential, nil
 	}
-	if credential.AccessToken != "" && (credential.ExpiresAt == nil || credential.ExpiresAt.After(time.Now().Add(time.Minute))) {
+	lock, _ := m.refreshing.LoadOrStore(connection.ID, &sync.Mutex{})
+	mutex := lock.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
+	// Another caller may have refreshed while this one waited for the lock.
+	_, latest, err := m.store.GetConnection(ctx, connection.ID)
+	if err != nil {
+		return credential, err
+	}
+	credential = latest
+	if fresh(credential) {
 		return credential, nil
 	}
 	if credential.RefreshToken == "" {
@@ -191,16 +208,23 @@ func (m *Manager) Resolve(ctx context.Context, connection store.Connection, cred
 	if response.RefreshToken != "" {
 		credential.RefreshToken = response.RefreshToken
 	}
-	if response.ExpiresIn > 0 {
-		expires := time.Now().Add(time.Duration(response.ExpiresIn) * time.Second)
-		credential.ExpiresAt = &expires
-	} else {
-		credential.ExpiresAt = nil
-	}
+	credential.ExpiresAt = expiry(response.ExpiresIn)
 	if err := m.store.SaveCredential(ctx, connection.ID, credential); err != nil {
 		return credential, err
 	}
 	return credential, nil
+}
+
+func fresh(credential store.Credential) bool {
+	return credential.AccessToken != "" && (credential.ExpiresAt == nil || credential.ExpiresAt.After(time.Now().Add(time.Minute)))
+}
+
+func expiry(expiresIn int64) *time.Time {
+	if expiresIn <= 0 {
+		return nil
+	}
+	expires := time.Now().Add(time.Duration(expiresIn) * time.Second)
+	return &expires
 }
 
 type tokenResponse struct {
@@ -213,17 +237,16 @@ type tokenResponse struct {
 }
 
 func (m *Manager) exchange(ctx context.Context, config store.OAuthConfig, credential store.Credential, form url.Values) (tokenResponse, error) {
+	if config.TokenAuthMethod == "client_secret_post" {
+		form.Set("client_secret", credential.ClientSecret)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return tokenResponse{}, err
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
-	if config.TokenAuthMethod == "client_secret_post" {
-		form.Set("client_secret", credential.ClientSecret)
-		request.Body = io.NopCloser(strings.NewReader(form.Encode()))
-		request.ContentLength = int64(len(form.Encode()))
-	} else if config.TokenAuthMethod == "client_secret_basic" && credential.ClientSecret != "" {
+	if config.TokenAuthMethod == "client_secret_basic" && credential.ClientSecret != "" {
 		request.SetBasicAuth(config.ClientID, credential.ClientSecret)
 	}
 	response, err := m.http.Do(request)

@@ -1,0 +1,37 @@
+{{define "content"}}{{$d := .Data}}
+<header class="page-header">
+  <div>
+    <h1>Agents</h1>
+    <p class="lede">Machine identities that connect to the endpoint. Each holds its own tokens and grants.</p>
+  </div>
+  <div class="page-actions">
+    {{if $.CanManage}}<a class="btn" href="/agents/discover">Discover installed</a>{{end}}
+    {{if $.CanManage}}<a class="btn btn-primary" href="/agents/new">New agent</a>{{end}}
+  </div>
+</header>
+
+<form class="filters" method="get" action="/agents">
+  <input type="search" name="q" value="{{$d.Query}}" placeholder="Search agents" aria-label="Search agents">
+  <button class="btn" type="submit">Search</button>
+  {{if $d.Query}}<a class="btn btn-ghost" href="/agents">Clear</a>{{end}}
+</form>
+
+{{if $d.Agents}}
+<div class="panel">
+  <table class="table">
+    <thead><tr><th>Agent</th><th>Source</th><th>Status</th><th class="num">Tools</th><th class="num">Tokens</th><th>Last used</th></tr></thead>
+    <tbody>{{range $d.Agents}}<tr>
+      <td><a href="/agents/{{.ID}}">{{.Name}}</a><span class="muted small block mono">{{.Slug}}</span></td>
+      <td>{{if .Runtime}}{{runtime .Runtime}} · {{.Profile}}<span class="muted small block">{{.Environment}}</span>{{else}}<span class="muted">Manual</span>{{end}}</td>
+      <td><span class="badge badge-{{badge .Status}}">{{status .Status}}</span></td>
+      <td class="num">{{.ToolCount}}</td>
+      <td class="num">{{.TokenCount}}</td>
+      <td class="muted nowrap">{{date .LastUsedAt}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+  {{template "pager" $d.Pager}}
+</div>
+{{else}}
+<div class="panel empty">{{if $d.Query}}No agents match “{{$d.Query}}”.{{else}}No agents yet. {{if $.CanManage}}<a href="/agents/new">Create one</a>{{end}} or {{if $.CanManage}}<a href="/agents/discover">discover installed agents</a>{{end}}.{{end}}</div>
+{{end}}
+{{end}}

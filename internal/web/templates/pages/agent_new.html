@@ -1,0 +1,28 @@
+{{define "content"}}{{$f := .Data}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/agents">Agents</a> / New</p>
+    <h1>New agent</h1>
+    <p class="lede">Creates an identity and issues its first token.</p>
+  </div>
+</header>
+
+<form class="form panel narrow" method="post" action="/agents">
+  {{if $f.Error}}<div class="alert alert-error"><p>{{$f.Error}}</p></div>{{end}}
+  <div class="panel-body">
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{$f.Name}}" required autofocus placeholder="Automation agent">
+    </div>
+    <div class="field">
+      <label for="slug">Slug <span class="hint">optional</span></label>
+      <input id="slug" name="slug" value="{{$f.Slug}}" pattern="[a-z0-9][a-z0-9-]*" placeholder="automation-agent">
+      <p class="hint">Short identifier used in configuration and logs. Derived from the name when blank.</p>
+    </div>
+  </div>
+  <div class="panel-foot form-actions">
+    <button class="btn btn-primary" type="submit">Create agent</button>
+    <a class="btn btn-ghost" href="/agents">Cancel</a>
+  </div>
+</form>
+{{end}}

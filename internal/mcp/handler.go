@@ -286,13 +286,13 @@ func (h *Handler) callTool(w http.ResponseWriter, ctx context.Context, id, raw j
 	}
 	tool, connection, credential, err := h.store.ResolveGrantedTool(ctx, agent.ID, params.Name)
 	if errors.Is(err, store.ErrNotFound) {
-		_ = h.store.RecordAudit(ctx, agent.ID, "", "", "tools/call", "denied", "tool not granted", time.Since(start))
+		h.audit(ctx, agent.ID, "", "", "tools/call", "denied", "tool not granted", time.Since(start))
 		h.writeError(w, id, -32601, "tool not found")
 		return
 	}
 	if err != nil {
 		h.log.Error("authorize tool", "error", err)
-		_ = h.store.RecordAudit(ctx, agent.ID, "", "", "tools/call", "error", "authorization store unavailable", time.Since(start))
+		h.audit(ctx, agent.ID, "", "", "tools/call", "error", "authorization store unavailable", time.Since(start))
 		h.writeError(w, id, -32603, "authorization unavailable")
 		return
 	}
@@ -306,24 +306,31 @@ func (h *Handler) callTool(w http.ResponseWriter, ctx context.Context, id, raw j
 	}
 	credential, err = h.credentials.Resolve(ctx, connection, credential)
 	if err != nil {
-		_ = h.store.RecordAudit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "error", err.Error(), time.Since(start))
+		h.audit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "error", err.Error(), time.Since(start))
 		h.writeError(w, id, -32603, "connection authorization unavailable")
 		return
 	}
 	result, err := h.caller.Call(ctx, tool, connection, credential, store.ToolCall{Arguments: params.Arguments, InputResponses: params.InputResponses, RequestState: params.RequestState})
 	if err != nil {
 		h.log.Error("call upstream", "tool", tool.ExposedName, "error", err)
-		_ = h.store.RecordAudit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "error", err.Error(), time.Since(start))
+		h.audit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "error", err.Error(), time.Since(start))
 		h.writeError(w, id, -32603, "upstream tool failed")
 		return
 	}
-	_ = h.store.RecordAudit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "allowed", "", time.Since(start))
+	h.audit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "allowed", "", time.Since(start))
 	var decoded map[string]any
 	if err := json.Unmarshal(result, &decoded); err != nil {
 		h.writeError(w, id, -32603, "invalid upstream result")
 		return
 	}
 	h.writeResult(w, id, h.decorate(decoded, modern))
+}
+
+// audit records an outcome and logs, rather than hides, a failure to do so.
+func (h *Handler) audit(ctx context.Context, agentID, connectionID, toolID, method, decision, reason string, duration time.Duration) {
+	if err := h.store.RecordAudit(ctx, agentID, connectionID, toolID, method, decision, reason, duration); err != nil {
+		h.log.Error("record audit event", "agent", agentID, "tool", toolID, "decision", decision, "error", err)
+	}
 }
 
 func (h *Handler) decorate(result map[string]any, modern bool) map[string]any {

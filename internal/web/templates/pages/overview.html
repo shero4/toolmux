@@ -1,0 +1,46 @@
+{{define "content"}}{{$d := .Data}}
+<header class="page-header">
+  <div>
+    <h1>Overview</h1>
+    <p class="lede">Agents, upstream health, and recent calls for this installation.</p>
+  </div>
+</header>
+
+{{if $d.Empty}}
+<section class="panel">
+  <div class="panel-body steps">
+    <div class="step"><span class="step-n">1</span><div><strong>Add a connection</strong><p>Register an MCP server, HTTP API, or installed command once.</p>{{if $.CanManage}}<a class="btn btn-sm" href="/connections/new">New connection</a>{{end}}</div></div>
+    <div class="step"><span class="step-n">2</span><div><strong>Create an agent</strong><p>Each agent gets its own revocable token for the endpoint in the sidebar.</p>{{if $.CanManage}}<a class="btn btn-sm" href="/agents/new">New agent</a>{{end}}</div></div>
+    <div class="step"><span class="step-n">3</span><div><strong>Grant access</strong><p>Assign whole connections or individual tools from the agent page.</p></div></div>
+  </div>
+  <div class="panel-foot muted">Running Hermes or OpenClaw on this machine? {{if $.CanManage}}<a href="/agents/discover">Discover installed agents</a>{{end}} to import them in one step.</div>
+</section>
+{{end}}
+
+<div class="stats">
+  <a class="stat" href="/agents"><span class="stat-label">Agents</span><span class="stat-value">{{$d.ActiveAgents}}</span><span class="stat-note">active of {{$d.Agents}}</span></a>
+  <a class="stat" href="/connections"><span class="stat-label">Connections</span><span class="stat-value">{{$d.HealthyConnections}}</span><span class="stat-note">connected of {{$d.Connections}}</span></a>
+  <a class="stat" href="/tools"><span class="stat-label">Tools</span><span class="stat-value">{{$d.Tools}}</span><span class="stat-note">available to grant</span></a>
+  <a class="stat" href="/activity"><span class="stat-label">Calls, last 24 h</span><span class="stat-value">{{$d.Stats.Allowed}}</span><span class="stat-note">{{$d.Stats.Denied}} denied · {{$d.Stats.Errors}} {{plural $d.Stats.Errors "error" "errors"}}</span></a>
+</div>
+
+{{if $d.Attention}}
+<section class="panel">
+  <header class="panel-header"><h2>Needs attention</h2><span>{{len $d.Attention}} {{plural (len $d.Attention) "connection" "connections"}}</span></header>
+  <table class="table">
+    <thead><tr><th>Connection</th><th>Status</th><th>Detail</th><th class="actions"></th></tr></thead>
+    <tbody>{{range $d.Attention}}<tr>
+      <td><a href="/connections/{{.ID}}">{{.Name}}</a><span class="muted small block">{{.ConnectorName}} · {{kind .Kind}}</span></td>
+      <td><span class="badge badge-{{badge .Status}}">{{status .Status}}</span></td>
+      <td class="muted">{{if .LastError}}{{short .LastError}}{{else}}Not checked yet{{end}}</td>
+      <td class="actions">{{if eq .AuthMethod "oauth2"}}{{if $.CanManage}}<form method="post" action="/connections/{{.ID}}/authorize"><button class="btn btn-sm btn-primary" type="submit">Authorize</button></form>{{end}}{{end}}{{if $.CanManage}}<form method="post" action="/connections/{{.ID}}/check"><input type="hidden" name="return_url" value="/"><button class="btn btn-sm" type="submit">Check</button></form>{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</section>
+{{end}}
+
+<section class="panel">
+  <header class="panel-header"><h2>Recent activity</h2><a href="/activity">View all</a></header>
+  {{if $d.Recent}}{{template "activity-table" $d.Recent}}{{else}}<div class="empty">No calls recorded yet.</div>{{end}}
+</section>
+{{end}}

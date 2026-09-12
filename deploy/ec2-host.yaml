@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dedicated Toolmux and future Hermes host, private application access
+Parameters:
+  ImageId:
+    Type: AWS::EC2::Image::Id
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+  AdminCIDR:
+    Type: String
+    Description: Administrator public IPv4 address with /32
+  InstanceType:
+    Type: String
+    Default: t3.xlarge
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.88.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: toolmux-hermes}]
+  Gateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: {VpcId: !Ref VPC, InternetGatewayId: !Ref Gateway}
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.88.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+  Routes:
+    Type: AWS::EC2::RouteTable
+    Properties: {VpcId: !Ref VPC}
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties: {RouteTableId: !Ref Routes, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Gateway}
+  SubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {RouteTableId: !Ref Routes, SubnetId: !Ref Subnet}
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH from administrator only; Toolmux accessed through tunnel
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref AdminCIDR}
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: {Roles: [!Ref Role]}
+  Host:
+    Type: AWS::EC2::Instance
+    DependsOn: InternetRoute
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      CreditSpecification: {CPUCredits: standard}
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref Profile
+      MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 1}
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: {VolumeSize: 80, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false}
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref Subnet
+          AssociatePublicIpAddress: true
+          GroupSet: [!Ref SecurityGroup]
+      Tags: [{Key: Name, Value: toolmux-hermes}, {Key: Project, Value: toolmux}, {Key: Purpose, Value: agent-host}]
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y docker.io docker-compose-v2 git python3-venv curl ca-certificates openssl
+          systemctl enable --now docker
+          id toolmux >/dev/null 2>&1 || useradd --create-home --home-dir /var/lib/toolmux --shell /bin/bash toolmux
+          usermod -aG docker toolmux
+          install -d -o toolmux -g toolmux /opt/toolmux
+  Address:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties: {Domain: vpc}
+  AddressAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties: {InstanceId: !Ref Host, AllocationId: !GetAtt Address.AllocationId}
+Outputs:
+  InstanceId: {Value: !Ref Host}
+  PublicIP: {Value: !Ref Address}
+  SecurityGroupId: {Value: !Ref SecurityGroup}

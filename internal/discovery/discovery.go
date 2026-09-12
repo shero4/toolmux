@@ -14,8 +14,31 @@ import (
 	"time"
 )
 
+// Candidate is an agent installation found on the host. ID is a stable hash
+// of runtime, environment, profile, and configuration path.
 type Candidate struct {
 	ID, Runtime, Profile, Name, Environment, ConfigPath string
+}
+
+const (
+	localEnvironment = "This computer"
+	mountEnvironment = "Mounted host"
+	wslPrefix        = "WSL · "
+)
+
+// InWSL reports whether the candidate lives inside a WSL distribution, which a
+// native Windows process can list but cannot open or run.
+func (c Candidate) InWSL() bool {
+	return strings.HasPrefix(c.Environment, wslPrefix)
+}
+
+// Identity is a human-readable, slug-friendly identity that stays unique when
+// the same profile name exists in more than one environment.
+func (c Candidate) Identity() string {
+	if c.Environment == localEnvironment || c.Environment == mountEnvironment {
+		return c.Runtime + "-" + c.Profile
+	}
+	return c.Runtime + "-" + strings.TrimPrefix(c.Environment, wslPrefix) + "-" + c.Profile
 }
 
 type Scanner struct {
@@ -73,6 +96,15 @@ func (s *Scanner) scanHome(home, environment string, seen map[string]Candidate) 
 	s.scanHermes(filepath.Join(home, ".hermes"), environment, seen)
 	s.scanHermes(filepath.Join(home, "AppData", "Local", "hermes"), environment, seen)
 	s.scanOpenClaw(filepath.Join(home, ".openclaw"), "default", environment, seen)
+	if p := filepath.Join(home, ".codex", "config.toml"); isFile(p) {
+		add(seen, "codex", "default", "Codex · default", environment, p)
+	}
+	if p := filepath.Join(home, ".claude.json"); isFile(p) {
+		add(seen, "claude", "default", "Claude Code · default", environment, p)
+	}
+	if p := filepath.Join(home, ".mcp.json"); isFile(p) {
+		add(seen, "claude", "project", "Claude Code · project", environment, p)
+	}
 	matches, _ := filepath.Glob(filepath.Join(home, ".openclaw-*"))
 	for _, state := range matches {
 		s.scanOpenClaw(state, profileFromState(state), environment, seen)

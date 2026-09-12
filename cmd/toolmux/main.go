@@ -22,6 +22,7 @@ import (
 	"github.com/shero4/toolmux/internal/control"
 	"github.com/shero4/toolmux/internal/discovery"
 	"github.com/shero4/toolmux/internal/execute"
+	"github.com/shero4/toolmux/internal/gateway"
 	"github.com/shero4/toolmux/internal/importer"
 	"github.com/shero4/toolmux/internal/mcp"
 	"github.com/shero4/toolmux/internal/migrate"
@@ -92,8 +93,10 @@ func main() {
 	}
 	mcpHandler := mcp.NewHandler(db, executor, oauthManager, log)
 	adminHandler := control.New(db, health, hermesImporter, control.Token(cfg.MasterKey))
-	server := &http.Server{Addr: cfg.Addr, Handler: ui.Handler(mcpHandler, adminHandler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
-	go health.Run(ctx, 5*time.Minute)
+	// Tool calls may legitimately run for up to an hour, so responses are not
+	// given a fixed write deadline; each executor bounds its own work.
+	server := &http.Server{Addr: cfg.Addr, Handler: ui.Handler(mcpHandler, adminHandler, gateway.New(db, log)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	go ui.RunOperations(ctx)
 	go func() {
 		log.Info("toolmux started", "addr", cfg.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

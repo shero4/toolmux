@@ -30,3 +30,15 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local editor/agent tooling
+/.claude/
+
+# Python test and CLI helper caches
+__pycache__/
+*.py[cod]
+
+# Private deployment and local execution records
+/deploy/DEPLOYMENT-*.md
+/tests/e2e/REPORT-*.md
+/tests/e2e/OPERATIONS-*.md

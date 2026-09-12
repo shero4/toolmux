@@ -37,12 +37,12 @@ func TestWriteToolmuxServerReplacesConfigAndKeepsBackup(t *testing.T) {
 	if err := writeToolmuxServer(path, "http://localhost:8080/mcp", "tmx_test"); err != nil {
 		t.Fatal(err)
 	}
-	configured, err := hasToolmuxServer(path, "http://localhost:8080/mcp")
+	token, configured, err := toolmuxServerToken(path, "http://localhost:8080/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !configured {
-		t.Fatal("Toolmux entry was not written")
+	if !configured || token != "tmx_test" {
+		t.Fatalf("Toolmux entry was not written: configured=%v token=%q", configured, token)
 	}
 	backup, err := os.ReadFile(path + ".toolmux.bak")
 	if err != nil {
@@ -61,11 +61,9 @@ func TestWriteToolmuxServerReplacesConfigAndKeepsBackup(t *testing.T) {
 	if err := removeToolmuxServer(path); err != nil {
 		t.Fatal(err)
 	}
-	configured, err = hasToolmuxServer(path, "http://localhost:8080/mcp")
-	if err != nil {
+	if _, configured, err = toolmuxServerToken(path, "http://localhost:8080/mcp"); err != nil {
 		t.Fatal(err)
-	}
-	if configured {
+	} else if configured {
 		t.Fatal("Toolmux entry was not removed")
 	}
 	updated, err = os.ReadFile(path)
@@ -74,5 +72,15 @@ func TestWriteToolmuxServerReplacesConfigAndKeepsBackup(t *testing.T) {
 	}
 	if !strings.Contains(string(updated), "existing:") {
 		t.Fatal("existing MCP configuration was removed")
+	}
+}
+
+func TestImportServerDescribesLocalCommand(t *testing.T) {
+	server, err := importServer(discoveryCandidate("/tmp/config.yaml"), "whoop", rawServer{Command: "uvx", Args: []string{"whoop-mcp"}, Env: map[string]string{"WHOOP_TOKEN": "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Kind != "Local MCP" || server.Endpoint != "uvx whoop-mcp" || server.imported.Kind != "mcp_stdio" {
+		t.Fatalf("unexpected server: %#v", server)
 	}
 }

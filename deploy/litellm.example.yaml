@@ -1,0 +1,25 @@
+# Copy to an ignored local file and set LITELLM_CONFIG to that path.
+# Models are illustrative; select IDs available to your own provider account.
+# Toolmux discovers model_name; LiteLLM resolves litellm_params.model.
+model_list:
+  - model_name: codex
+    model_info:
+      mode: responses
+    litellm_params:
+      model: chatgpt/gpt-5.3-codex
+  # - model_name: claude
+  #   litellm_params:
+  #     model: anthropic/YOUR_MODEL_ID
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  # - model_name: gemini
+  #   litellm_params:
+  #     model: gemini/YOUR_MODEL_ID
+  #     api_key: os.environ/GEMINI_API_KEY
+  # Bedrock / Vertex: configure their supported workload identity in the
+  # bridge deployment, then add bedrock/... or vertex_ai/... model entries.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+litellm_settings:
+  # Keep prompt/completion payloads out of observability callbacks and logs.
+  turn_off_message_logging: true
+  set_verbose: false

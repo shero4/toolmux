@@ -1,0 +1,36 @@
+# Dependencies for native Toolmux. Paths are relative to this file.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: toolmux
+      POSTGRES_USER: toolmux
+      POSTGRES_PASSWORD: ${TOOLMUX_DB_PASSWORD:?set database password}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["toolmux-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolmux -d toolmux"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+  models:
+    image: ${LITELLM_IMAGE:?pin a tested bridge image digest}
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set bridge key}
+      CHATGPT_TOKEN_DIR: /var/lib/litellm/chatgpt
+    ports: ["127.0.0.1:4000:4000"]
+    volumes:
+      - /etc/toolmux/litellm.yaml:/app/config.yaml:ro
+      - model-auth:/var/lib/litellm
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  toolmux-data:
+  model-auth:

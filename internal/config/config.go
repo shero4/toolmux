@@ -1,3 +1,5 @@
+// Package config loads runtime settings from the environment, with a local
+// .env file as a fallback for development.
 package config
 
 import (
@@ -18,19 +20,22 @@ type Config struct {
 
 func Load() (Config, error) {
 	fileValues := readEnvironmentFile()
-	get := func(name, legacyName, fallback string) string {
-		return value(fileValues, name, legacyName, fallback)
+	get := func(name, fallback string) string {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+		if value := fileValues[name]; value != "" {
+			return value
+		}
+		return fallback
 	}
 	cfg := Config{
-		Addr:           get("TOOLMUX_ADDR", "SENTINEL_ADDR", ":8080"),
-		BaseURL:        strings.TrimRight(get("TOOLMUX_BASE_URL", "SENTINEL_BASE_URL", "http://localhost:8080"), "/"),
-		DatabaseURL:    get("TOOLMUX_DATABASE_URL", "SENTINEL_DATABASE_URL", "postgres://toolmux:toolmux@127.0.0.1:5432/toolmux?sslmode=disable"),
-		DiscoveryRoots: splitPaths(get("TOOLMUX_DISCOVERY_ROOTS", "SENTINEL_DISCOVERY_ROOTS", "")),
+		Addr:           get("TOOLMUX_ADDR", "127.0.0.1:8080"),
+		BaseURL:        strings.TrimRight(get("TOOLMUX_BASE_URL", "http://localhost:8080"), "/"),
+		DatabaseURL:    get("TOOLMUX_DATABASE_URL", "postgres://toolmux:toolmux@127.0.0.1:5432/toolmux?sslmode=disable"),
+		DiscoveryRoots: splitPaths(get("TOOLMUX_DISCOVERY_ROOTS", "")),
 	}
-	if cfg.DatabaseURL == "" {
-		return Config{}, errors.New("TOOLMUX_DATABASE_URL is required")
-	}
-	key, err := base64.StdEncoding.DecodeString(get("TOOLMUX_MASTER_KEY", "SENTINEL_MASTER_KEY", ""))
+	key, err := base64.StdEncoding.DecodeString(get("TOOLMUX_MASTER_KEY", ""))
 	if err != nil || len(key) != 32 {
 		return Config{}, errors.New("TOOLMUX_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
@@ -48,18 +53,7 @@ func splitPaths(value string) []string {
 	return paths
 }
 
-func value(fileValues map[string]string, name, legacyName, fallback string) string {
-	for _, candidate := range []string{name, legacyName} {
-		if value := os.Getenv(candidate); value != "" {
-			return value
-		}
-		if value := fileValues[candidate]; value != "" {
-			return value
-		}
-	}
-	return fallback
-}
-
+// readEnvironmentFile parses KEY=value lines from TOOLMUX_ENV_FILE or ./.env.
 func readEnvironmentFile() map[string]string {
 	path := os.Getenv("TOOLMUX_ENV_FILE")
 	if path == "" {

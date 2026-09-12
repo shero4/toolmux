@@ -1,0 +1,5 @@
+{$TOOLMUX_DOMAIN} {
+	reverse_proxy toolmux:8080 {
+		flush_interval -1
+	}
+}

@@ -1,0 +1,12 @@
+{{define "content"}}
+<div class="auth-card panel"><div class="panel-body">
+<h1>{{if .Data.Setup}}Welcome to Toolmux{{else}}Sign in to Toolmux{{end}}</h1>
+<p class="muted auth-lede">{{if .Data.Setup}}Create the administrator account for this installation. Your account persists across restarts.{{else}}Manage your agents, tools, and model providers.{{end}}</p>
+{{with .Data.Error}}<div class="alert alert-error" role="alert">{{.}}</div>{{end}}
+<form method="post" action="{{if .Data.Setup}}/setup{{else}}/login{{end}}">
+<div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required maxlength="120" autofocus></div>
+<div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="{{if .Data.Setup}}new-password{{else}}current-password{{end}}" required {{if .Data.Setup}}minlength="12"{{end}} maxlength="72"></div>
+{{if .Data.Setup}}<div class="field"><label for="confirm">Confirm password</label><input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="72"><span class="hint">Use at least 12 characters.</span></div>{{end}}
+<button class="btn btn-primary" type="submit">{{if .Data.Setup}}Create administrator{{else}}Sign in{{end}}</button>
+</form></div></div>
+{{end}}

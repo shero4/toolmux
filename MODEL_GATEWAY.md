@@ -1,0 +1,156 @@
+# Model gateway
+
+Toolmux is a shared inference entry point. The client chooses its model,
+including auxiliary models and fallbacks; Toolmux never chooses these for it.
+
+## Provider setup
+
+1. Sign in and open **Models → Add provider**.
+2. Set a display name and stable prefix, for example `work-provider`.
+3. Enter the API base URL including its version path, and the provider API key.
+4. Save, then choose **Discover models**, or add exact upstream model IDs.
+5. In an agent, configure a custom OpenAI-compatible provider with base URL
+   `http://localhost:8080/v1` and its existing Toolmux agent token as the API key.
+6. Select a returned model ID such as `work-provider/model-id`.
+
+Every active agent token can list and invoke every configured model on enabled
+providers. MCP tool grants are independent. Revoke the token or disable the
+agent to stop both tool and model access. Pausing a provider prevents new calls
+through that provider; already-running requests finish normally.
+
+The model catalog persists in PostgreSQL. Discovery adds models without
+deleting manually configured IDs or silently removing existing ones. Changing
+a provider's display name leaves its model prefix intact.
+
+## Protocols and authentication
+
+Protocol and authentication are independent, following the separation used by
+Hermes provider profiles. Native JSON parameters, tool definitions, thinking,
+images, and streaming events are forwarded without a lossy translation layer.
+
+| Protocol | Client endpoints | Base URL |
+| --- | --- | --- |
+| OpenAI-compatible | chat/completions, responses, completions, embeddings | API version URL, e.g. https://api.openai.com/v1 |
+| Anthropic-compatible | messages, messages/count_tokens | Root or /v1 URL |
+| Azure deployment API | chat/completions, completions, embeddings | Resource root; configure API version and deployment names |
+| LiteLLM | OpenAI and Anthropic endpoints supported by the bridge | Proxy API version URL |
+
+Every endpoint above is under Toolmux's `/v1/`. `GET /v1/models` returns the
+shared catalog. Authenticate with `Authorization: Bearer <agent-token>` or
+`x-api-key: <agent-token>`; incoming credentials never pass upstream. For an
+Anthropic SDK, set its base URL to the Toolmux root (without `/v1`). For an
+OpenAI SDK, use the Toolmux root plus `/v1`.
+
+Native adapters preserve their own protocol. OpenAI requests to a direct
+Anthropic provider return a clear protocol mismatch. Use LiteLLM when clients
+need a different protocol than the provider speaks. Azure's new `/openai/v1`
+API uses the OpenAI-compatible adapter; the Azure adapter is for the classic
+versioned deployment API. Its model IDs are deployment names entered manually.
+
+Authentication choices:
+
+- Protocol default: Bearer for OpenAI/LiteLLM, x-api-key for Anthropic,
+  api-key for Azure.
+- Bearer token, custom API-key header, HTTP Basic, or no built-in auth.
+- OAuth 2.0 client credentials: token endpoint, client ID, client secret,
+  optional scope/audience, and Basic or request-body client authentication.
+  Short-lived bearer tokens are cached until shortly before expiry. Secret
+  or auth-setting changes invalidate reuse. No expiry means no cache reuse.
+- Additional headers for organizations, projects, beta features, or custom
+  authorization. All values are encrypted and never returned in forms. Blank
+  preserves saved headers; `{}` clears them. Select no built-in authentication
+  when supplying your own Authorization header. Transport headers are rejected.
+
+Secrets are encrypted in PostgreSQL. Blank edits retain credentials; an explicit
+clear option removes them. Anthropic version/beta headers may be supplied by
+clients; a configured provider value takes precedence. Other client headers,
+including cookies and credentials, are not forwarded.
+
+## Optional LiteLLM bridge
+
+The included `compose.models.yaml` runs a separate, loopback-bound LiteLLM
+service with persistent subscription-token storage. This keeps Toolmux's Go
+runtime small while delegating provider translations and cloud SDK identity to
+an established library. Gemini, Bedrock, Vertex, and other SDK-based providers
+are configured in LiteLLM using their documented credentials or workload identity.
+
+1. Copy `deploy/litellm.example.yaml` to an ignored local file under `tmp/`.
+   Set `LITELLM_CONFIG` to that file. Add model mappings available to your account.
+2. Set a separate random `LITELLM_MASTER_KEY` in your environment. Use provider
+   environment variables or a secrets manager; do not commit real credentials.
+3. Run `docker compose -f compose.models.yaml up -d`. The default image follows
+   LiteLLM's `main-stable` channel; set `LITELLM_IMAGE` to a tested version or digest
+   for reproducible deployment.
+4. Add a Toolmux provider with protocol LiteLLM, URL `http://127.0.0.1:4000/v1`
+   for native Toolmux, and the bridge's master key. If both services run through
+   the combined Compose files, use `http://models:4000/v1` from the Toolmux container.
+5. Discover models. Toolmux exposes the configured LiteLLM `model_name` under
+   its own provider prefix. For example `bridge/codex` maps to the sample's
+   `chatgpt/gpt-5.3-codex`; replace that illustrative model as needed.
+
+ChatGPT/Codex subscription access uses LiteLLM's `chatgpt/` provider. The first
+local request prints a verification URL and device code in the bridge logs;
+complete the sign-in yourself. Follow `docker compose -f compose.models.yaml logs -f models`
+while making that request. LiteLLM owns token refresh and keeps its auth in the
+`model-auth` Docker volume. Toolmux does not read desktop/Hermes credential files.
+Responses is the native API; Chat Completions is translated for supported models.
+Device sign-in is in LiteLLM, not a native Toolmux sign-in button. For a separate
+interactive login without making an inference request, run
+`python tools/model_login.py --env-file PATH_TO_PRIVATE_BRIDGE_ENV` after starting
+the bridge. It prints the device instructions without printing saved tokens.
+See `tests/e2e/REPORT-2026-09-12.md` for live validation and compatibility limits.
+The tested Codex path uses streamed Responses and an explicit named Responses
+provider in Hermes; the tested bridge's Chat Completions conversion was unreliable
+for that account's model.
+
+Claude Pro/Max subscription credentials are not offered as a gateway auth method:
+Anthropic's current guidance disallows third-party apps intermediating those
+credentials. Use Claude API keys or supported cloud-provider authentication.
+
+This is an extensible set of protocols and authentication mechanisms, not a claim
+that every endpoint or identity scheme is interchangeable. AWS request signing,
+Google workload identity, and provider-specific OAuth belong in the bridge.
+Arbitrary protocol translation, generic interactive OAuth, mTLS, and API-key query
+parameters are not implemented in Toolmux's native adapters.
+
+References checked September 12, 2026:
+
+- [Hermes provider profiles](https://github.com/NousResearch/hermes-agent/blob/main/providers/base.py)
+- [LiteLLM provider catalog](https://docs.litellm.ai/docs/providers)
+- [LiteLLM Anthropic-compatible API](https://docs.litellm.ai/docs/anthropic_unified)
+- [LiteLLM ChatGPT subscription authentication](https://docs.litellm.ai/docs/providers/chatgpt)
+- [Claude authentication restrictions](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+
+## Activity and operational limits
+
+Tool and model calls share Activity and the overview's 24-hour counts. Model
+events retain the provider name, requested model ID, upstream model, outcome,
+elapsed time, and input/output tokens if reported. Missing usage is shown as
+an em dash, not zero. For streaming chat, a client can request usage with
+`stream_options.include_usage` if its provider supports it. No token prices or
+cost estimates are inferred.
+
+The gateway has a 16 MiB request limit, 32 MiB non-streaming response limit,
+and a per-provider timeout between 10 seconds and one hour. Streams are
+forwarded incrementally with bounded usage inspection. Client cancellation
+cancels the upstream request. Failed or incomplete streams are recorded as
+errors. Provider redirects are rejected; inbound cookies and arbitrary client
+headers are never forwarded. Provider HTTP errors are returned with their
+status but a sanitized message.
+
+There is no automatic retry, failover, budget enforcement, prompt tracing, or
+background Responses retrieval. Provider keys use the installation encryption
+key; back it up separately from PostgreSQL. All provider URLs and host
+executables are administrator-controlled.
+
+## Verification
+
+Run `go test ./...` and `go vet ./...`. Database integration tests additionally
+require `TOOLMUX_TEST_DATABASE_URL` pointing to an isolated PostgreSQL database
+whose name ends in `_test`. Each test creates and removes its own schema.
+These tests cover first-run setup, session persistence, protected pages,
+provider creation/discovery, inference and activity, paused providers,
+revoked agent access, password changes, and login attempt limits.
+
+The opt-in local Hermes test is documented in `tests/e2e/README.md`. It exercises
+all four tool connection types and live inference through the running gateway.

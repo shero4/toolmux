@@ -1,0 +1,70 @@
+{{define "content"}}{{$t := .Data.Tool}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/tools">Tools</a> / <a href="/connections/{{$t.ConnectionID}}">{{$t.ConnectionName}}</a></p>
+    <h1 class="mono">{{$t.ExposedName}}{{if not $t.Enabled}} <span class="badge badge-muted">No longer upstream</span>{{end}}</h1>
+    <p class="lede">{{if $t.Title}}{{$t.Title}} · {{end}}{{kind $t.Kind}} tool on {{$t.ConnectionName}}.</p>
+  </div>
+</header>
+
+<div class="grid-2">
+  <section class="panel">
+    <header class="panel-header"><h2>Definition</h2></header>
+    <dl class="kv panel-body">
+      <dt>Upstream name</dt><dd class="mono">{{$t.UpstreamName}}</dd>
+      <dt>Connection</dt><dd><a href="/connections/{{$t.ConnectionID}}">{{$t.ConnectionName}}</a> <span class="muted">· {{kind $t.Connection.Kind}}</span></dd>
+      {{if $t.Description}}<dt>Description</dt><dd>{{$t.Description}}</dd>{{end}}
+      {{with $t.HTTP}}
+      <dt>Request</dt><dd class="mono">{{.Method}} {{.URLTemplate}}</dd>
+      {{if ne (json .QueryTemplate) "{}"}}<dt>Query</dt><dd><pre>{{json .QueryTemplate}}</pre></dd>{{end}}
+      {{if ne (json .HeadersTemplate) "{}"}}<dt>Headers</dt><dd><pre>{{json .HeadersTemplate}}</pre></dd>{{end}}
+      {{if json .BodyTemplate}}<dt>Body</dt><dd><pre>{{json .BodyTemplate}}</pre></dd>{{end}}
+      <dt>Timeout</dt><dd>{{seconds .TimeoutMS}} s</dd>
+      {{end}}
+      {{with $t.Command}}
+      <dt>Command</dt><dd class="mono">{{.Executable}} {{args .ArgsTemplate}}</dd>
+      {{if .WorkingDirectory}}<dt>Working directory</dt><dd class="mono">{{.WorkingDirectory}}</dd>{{end}}
+      <dt>Standard input</dt><dd>{{if eq .StdinMode "json"}}Call arguments as JSON{{else}}Nothing{{end}}</dd>
+      {{if .CredentialEnv}}<dt>Credential variable</dt><dd class="mono">{{.CredentialEnv}}</dd>{{end}}
+      <dt>Timeout</dt><dd>{{seconds .TimeoutMS}} s</dd>
+      {{end}}
+      <dt>Last seen</dt><dd>{{time $t.LastSeenAt}}</dd>
+      <dt>Created</dt><dd>{{time $t.CreatedAt}}</dd>
+    </dl>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header"><h2>Granted to</h2><span>{{len $t.Agents}} {{plural (len $t.Agents) "agent" "agents"}}</span></header>
+    {{if $t.Agents}}
+    <ul class="list">{{range $t.Agents}}<li><a href="/agents/{{.ID}}">{{.Name}}</a> <span class="badge badge-{{badge .Status}}">{{status .Status}}</span></li>{{end}}</ul>
+    {{else}}<div class="empty">No agent has this tool. Grant it from an agent page.</div>{{end}}
+  </section>
+</div>
+
+<section class="panel">
+  <header class="panel-header"><h2>Input schema</h2></header>
+  <pre class="code-block">{{json $t.InputSchema}}</pre>
+</section>
+{{if json $t.OutputSchema}}
+<section class="panel">
+  <header class="panel-header"><h2>Output schema</h2></header>
+  <pre class="code-block">{{json $t.OutputSchema}}</pre>
+</section>
+{{end}}
+{{if json $t.Annotations}}
+<section class="panel">
+  <header class="panel-header"><h2>Annotations</h2></header>
+  <pre class="code-block">{{json $t.Annotations}}</pre>
+</section>
+{{end}}
+
+{{if ne $t.Kind "mcp"}}
+<section class="panel panel-danger">
+  <header class="panel-header"><h2>Danger zone</h2></header>
+  <div class="panel-body danger-actions">
+    <div><strong>Delete tool</strong><p class="muted">Removes the definition and every grant on it.</p></div>
+    {{if $.CanManage}}<form method="post" action="/tools/{{$t.ID}}/delete" data-confirm="Delete {{$t.ExposedName}}?"><button class="btn btn-danger" type="submit">Delete</button></form>{{end}}
+  </div>
+</section>
+{{end}}
+{{end}}

@@ -1,3 +1,5 @@
+// Package importer brings Hermes profiles, their MCP servers, stored
+// authorization, and local Google Workspace CLIs into Toolmux.
 package importer
 
 import (
@@ -18,6 +20,8 @@ import (
 	"github.com/shero4/toolmux/internal/store"
 )
 
+var ErrProfileNotFound = errors.New("Hermes profile not found")
+
 type repository interface {
 	EnsureDiscoveredAgent(context.Context, string, string, string, string, string, string, string) (store.Agent, string, bool, error)
 	IssueAgentToken(context.Context, string, string) (string, error)
@@ -33,14 +37,23 @@ type Manager struct {
 	baseURL   string
 }
 
+// Inventory is everything the importer found on the host.
 type Inventory struct {
 	Profiles []Profile
+	Skipped  []Skipped
 	GWS      []GWSConnection
 }
 
 type Profile struct {
 	Candidate discovery.Candidate
 	Servers   []Server
+}
+
+// Skipped is a Hermes profile that was detected but cannot be imported from
+// this process, with the reason.
+type Skipped struct {
+	Candidate discovery.Candidate
+	Reason    string
 }
 
 type Server struct {
@@ -55,7 +68,7 @@ type GWSConnection struct {
 
 type Summary struct {
 	AgentsCreated, ConnectionsCreated, ConnectionsUpdated, ConfigsUpdated int
-	ConnectionIDs                                                         []string
+	AgentIDs, ConnectionIDs                                               []string
 	Warnings                                                              []string
 }
 
@@ -100,38 +113,66 @@ func New(store repository, scanner *discovery.Scanner, baseURL string) *Manager 
 	return &Manager{store: store, discovery: scanner, baseURL: strings.TrimRight(baseURL, "/")}
 }
 
+// DisconnectProfile removes the Toolmux server entry from a Hermes profile.
 func (m *Manager) DisconnectProfile(configPath string) error {
 	return removeToolmuxServer(configPath)
 }
 
-func (m *Manager) Scan(ctx context.Context) (Inventory, error) {
+// Scan reads every Hermes profile this process can open. Profiles that live
+// in another environment, or whose configuration cannot be parsed, are
+// reported in Skipped instead of failing the whole scan.
+func (m *Manager) Scan(ctx context.Context) Inventory {
+	return m.Inventory(ctx, m.discovery.Scan(ctx))
+}
+
+// Inventory builds the importable inventory from already-discovered candidates.
+func (m *Manager) Inventory(ctx context.Context, candidates []discovery.Candidate) Inventory {
 	var inventory Inventory
 	seen := make(map[string]bool)
-	for _, candidate := range m.discovery.Scan(ctx) {
+	for _, candidate := range candidates {
 		if candidate.Runtime != "hermes" || seen[candidate.ConfigPath] {
 			continue
 		}
 		seen[candidate.ConfigPath] = true
+		if candidate.InWSL() {
+			inventory.Skipped = append(inventory.Skipped, Skipped{Candidate: candidate, Reason: "Run Toolmux inside this WSL distribution to import the profile and reuse its local MCP servers."})
+			continue
+		}
 		profile, err := readProfile(candidate)
 		if err != nil {
-			return Inventory{}, err
+			inventory.Skipped = append(inventory.Skipped, Skipped{Candidate: candidate, Reason: err.Error()})
+			continue
 		}
 		inventory.Profiles = append(inventory.Profiles, profile)
 	}
 	inventory.GWS = discoverGWS()
-	return inventory, nil
+	return inventory
 }
 
+// ImportProfile imports one profile from the inventory by candidate ID.
+func (m *Manager) ImportProfile(ctx context.Context, inventory Inventory, candidateID string) (Summary, error) {
+	for _, profile := range inventory.Profiles {
+		if profile.Candidate.ID == candidateID {
+			return m.ImportAll(ctx, Inventory{Profiles: []Profile{profile}, GWS: inventory.GWS})
+		}
+	}
+	return Summary{}, ErrProfileNotFound
+}
+
+// ImportAll imports every profile in the inventory: one agent per profile, one
+// connection per enabled MCP server, every local Google Workspace identity as a
+// shared command connection, and a Toolmux entry in each profile's config.
 func (m *Manager) ImportAll(ctx context.Context, inventory Inventory) (Summary, error) {
 	var summary Summary
 	agents := make([]store.Agent, 0, len(inventory.Profiles))
 	for _, profile := range inventory.Profiles {
 		candidate := profile.Candidate
-		agent, token, created, err := m.store.EnsureDiscoveredAgent(ctx, candidate.Name, store.Slug("hermes-"+candidate.Profile), candidate.ID, candidate.Runtime, candidate.Profile, candidate.Environment, candidate.ConfigPath)
+		agent, token, created, err := m.store.EnsureDiscoveredAgent(ctx, candidate.Name, store.Slug(candidate.Identity()), candidate.ID, candidate.Runtime, candidate.Profile, candidate.Environment, candidate.ConfigPath)
 		if err != nil {
 			return summary, fmt.Errorf("import %s: %w", candidate.Name, err)
 		}
 		agents = append(agents, agent)
+		summary.AgentIDs = append(summary.AgentIDs, agent.ID)
 		if created {
 			summary.AgentsCreated++
 		}
@@ -178,13 +219,16 @@ func (m *Manager) ImportAll(ctx context.Context, inventory Inventory) (Summary, 
 		}
 	}
 
+	if len(agents) == 0 || len(inventory.GWS) == 0 {
+		return summary, nil
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return summary, err
 	}
 	for _, gws := range inventory.GWS {
 		var connectionID string
-		for _, agent := range agents {
+		for index, agent := range agents {
 			input := store.ImportedConnection{
 				SourceKey:      "gws:" + gws.Name,
 				Kind:           "command",
@@ -202,12 +246,9 @@ func (m *Manager) ImportAll(ctx context.Context, inventory Inventory) (Summary, 
 			connectionID = id
 			if created {
 				summary.ConnectionsCreated++
-			} else if agent.ID == agents[0].ID {
+			} else if index == 0 {
 				summary.ConnectionsUpdated++
 			}
-		}
-		if connectionID == "" {
-			continue
 		}
 		args, _ := json.Marshal([]string{"gws-call", gws.Executable})
 		if err := m.store.EnsureCommandTool(ctx, connectionID, "request", "Call Google Workspace", "Calls an authorized Google Workspace API through this local identity.", gwsSchema(), store.CommandToolSpec{
@@ -239,8 +280,7 @@ func readProfile(candidate discovery.Candidate) (Profile, error) {
 		if strings.EqualFold(name, "toolmux") {
 			continue
 		}
-		raw := config.MCPServers[name]
-		server, err := importServer(candidate, name, raw)
+		server, err := importServer(candidate, name, config.MCPServers[name])
 		if err != nil {
 			return Profile{}, err
 		}
@@ -268,7 +308,8 @@ func importServer(candidate discovery.Candidate, name string, raw rawServer) (Se
 		input.Kind = "mcp_stdio"
 		input.Credential.Environment = raw.Env
 		input.Stdio = &store.MCPStdioSpec{Executable: raw.Command, Args: args, WorkingDirectory: filepath.Dir(candidate.ConfigPath)}
-		server.Kind = "MCP command"
+		server.Kind = "Local MCP"
+		server.Endpoint = strings.TrimSpace(raw.Command + " " + strings.Join(raw.Args, " "))
 		server.Authorization = environmentLabel(raw.Env)
 	} else {
 		input.Kind = "mcp_http"
@@ -314,7 +355,8 @@ func readOAuth(configPath, name string) (store.Credential, store.OAuthConfig) {
 	readJSON(filepath.Join(directory, name+".meta.json"), &metadata)
 	credential := store.Credential{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, TokenType: token.TokenType, ClientSecret: client.ClientSecret}
 	if token.ExpiresAt > 0 {
-		expires := time.Unix(int64(token.ExpiresAt), int64((token.ExpiresAt-float64(int64(token.ExpiresAt)))*1e9))
+		seconds := int64(token.ExpiresAt)
+		expires := time.Unix(seconds, int64((token.ExpiresAt-float64(seconds))*1e9))
 		credential.ExpiresAt = &expires
 	}
 	tokenAuthMethod := client.TokenAuthMethod
@@ -378,8 +420,10 @@ func environmentLabel(environment map[string]string) string {
 	return fmt.Sprintf("%d environment value(s) imported", len(environment))
 }
 
+// discoverGWS finds gws-* executables on PATH. Each is a separately authorized
+// Google Workspace CLI identity.
 func discoverGWS() []GWSConnection {
-	seen := make(map[string]string)
+	seen := make(map[string]bool)
 	for _, directory := range filepath.SplitList(os.Getenv("PATH")) {
 		entries, err := os.ReadDir(directory)
 		if err != nil {
@@ -391,17 +435,14 @@ func discoverGWS() []GWSConnection {
 			}
 			name := strings.ToLower(entry.Name())
 			base := strings.TrimSuffix(strings.TrimSuffix(name, ".cmd"), ".ps1")
-			if !strings.HasPrefix(base, "gws-") {
-				continue
-			}
-			if _, ok := seen[base]; !ok || strings.HasSuffix(name, ".cmd") {
-				seen[base] = base
+			if strings.HasPrefix(base, "gws-") {
+				seen[base] = true
 			}
 		}
 	}
 	result := make([]GWSConnection, 0, len(seen))
-	for name, executable := range seen {
-		if path, err := exec.LookPath(executable); err == nil {
+	for name := range seen {
+		if path, err := exec.LookPath(name); err == nil {
 			result = append(result, GWSConnection{Name: name, Executable: path})
 		}
 	}
@@ -464,6 +505,8 @@ func removeToolmuxServer(path string) error {
 	return replaceYAML(path, &document, data, false)
 }
 
+// replaceYAML writes the document next to the original and swaps it into
+// place, keeping a one-time .toolmux.bak copy of the untouched original.
 func replaceYAML(path string, document *yaml.Node, original []byte, keepBackup bool) error {
 	backup := path + ".toolmux.bak"
 	if keepBackup {
@@ -513,11 +556,8 @@ func replaceYAML(path string, document *yaml.Node, original []byte, keepBackup b
 	return nil
 }
 
-func hasToolmuxServer(path, endpoint string) (bool, error) {
-	_, configured, err := toolmuxServerToken(path, endpoint)
-	return configured, err
-}
-
+// toolmuxServerToken reports whether the profile already points at this
+// Toolmux endpoint and returns the token it carries.
 func toolmuxServerToken(path, endpoint string) (string, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -528,13 +568,13 @@ func toolmuxServerToken(path, endpoint string) (string, bool, error) {
 		return "", false, err
 	}
 	server, ok := config.MCPServers["toolmux"]
-	value := singleHeaderValue(server.Headers, "Authorization")
+	value := headerValue(server.Headers, "Authorization")
 	token := strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
 	configured := ok && server.URL == endpoint && token != "" && token != value
 	return token, configured, nil
 }
 
-func singleHeaderValue(headers map[string]string, wanted string) string {
+func headerValue(headers map[string]string, wanted string) string {
 	for name, value := range headers {
 		if strings.EqualFold(name, wanted) {
 			return value
@@ -578,9 +618,6 @@ func scalar(value string) *yaml.Node {
 func title(value string) string {
 	parts := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(value))
 	for index := range parts {
-		if parts[index] == "" {
-			continue
-		}
 		parts[index] = strings.ToUpper(parts[index][:1]) + parts[index][1:]
 	}
 	return strings.Join(parts, " ")

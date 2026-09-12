@@ -1,0 +1,122 @@
+{{define "content"}}{{$d := .Data}}{{$c := $d.Connection}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/connections">Connections</a> / {{$c.Slug}}</p>
+    <h1>{{$c.Name}} <span class="badge badge-{{badge $c.Status}}">{{status $c.Status}}</span></h1>
+    <p class="lede">{{$c.ConnectorName}} · {{kind $c.Kind}} · {{auth $c.AuthMethod}}{{if $c.SourceKey}} · imported{{end}}</p>
+  </div>
+  <div class="page-actions">
+    {{if and $d.OAuth (ne $c.Status "disabled")}}{{if $.CanManage}}<form method="post" action="/connections/{{$c.ID}}/authorize"><button class="btn {{if eq $c.Status "reauthorization_required"}}btn-primary{{end}}" type="submit">{{if $d.OAuth.HasAccess}}Reauthorize{{else}}Authorize{{end}}</button></form>{{end}}{{end}}
+    {{if ne $c.Status "disabled"}}{{if $.CanManage}}<form method="post" action="/connections/{{$c.ID}}/check"><button class="btn" type="submit">Check now</button></form>{{end}}{{end}}
+    {{if $d.Declarative}}{{if $.CanManage}}<a class="btn btn-primary" href="/tools/new?connection={{$c.ID}}">Define tool</a>{{end}}{{end}}
+  </div>
+</header>
+
+{{if $c.LastError}}<div class="alert alert-error"><p>{{$c.LastError}}</p></div>{{end}}
+
+<div class="grid-2">
+  <section class="panel">
+    <header class="panel-header"><h2>Details</h2></header>
+    <dl class="kv panel-body">
+      {{if $c.EndpointURL}}<dt>Endpoint</dt><dd class="mono">{{$c.EndpointURL}}</dd>{{end}}
+      {{with $d.Stdio}}
+      <dt>Command</dt><dd class="mono">{{.Executable}} {{args .Args}}</dd>
+      {{if .WorkingDirectory}}<dt>Working directory</dt><dd class="mono">{{.WorkingDirectory}}</dd>{{end}}
+      {{end}}
+      {{if $c.HealthPath}}<dt>Health path</dt><dd class="mono">{{$c.HealthPath}}</dd>{{end}}
+      <dt>Tool prefix</dt><dd class="mono">{{$c.Slug}}__</dd>
+      <dt>Last checked</dt><dd>{{date $c.LastCheckedAt}}</dd>
+      <dt>Created</dt><dd>{{time $c.CreatedAt}}</dd>
+    </dl>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header"><h2>Authorization</h2><span>{{auth $c.AuthMethod}}</span></header>
+    <div class="panel-body">
+      {{if eq $c.AuthMethod "none"}}
+      <p class="muted">No credential is stored. {{if eq $c.Kind "command"}}Commands inherit the host environment.{{else if eq $c.Kind "mcp_stdio"}}The process inherits the host environment{{if $d.HasCredential}} plus the imported environment values{{end}}.{{else}}Requests are sent without authorization.{{end}}</p>
+      {{else if $d.OAuth}}
+      <dl class="kv">
+        <dt>Access token</dt><dd>{{if $d.OAuth.HasAccess}}Present{{if $d.OAuth.ExpiresAt}}, expires {{date $d.OAuth.ExpiresAt}}{{end}}{{else}}<span class="muted">Not obtained yet</span>{{end}}</dd>
+        <dt>Refresh token</dt><dd>{{if $d.OAuth.HasRefresh}}Present{{else}}<span class="muted">None</span>{{end}}</dd>
+        <dt>Client</dt><dd>{{if $d.OAuth.ClientID}}<span class="mono">{{$d.OAuth.ClientID}}</span>{{if $d.OAuth.Registered}} <span class="muted">registered by Toolmux</span>{{end}}{{else}}<span class="muted">Registered on first authorization</span>{{end}}</dd>
+        {{if $d.OAuth.AuthorizationURL}}<dt>Authorization URL</dt><dd class="mono">{{$d.OAuth.AuthorizationURL}}</dd>{{end}}
+      </dl>
+      {{else}}
+      <p class="muted">{{if $d.HasCredential}}A credential is stored and encrypted.{{else}}No credential is stored.{{end}}{{if eq $c.AuthMethod "header"}} Sent in the <span class="mono">{{$c.AuthName}}</span> header.{{else}} Sent as a bearer token.{{end}}</p>
+      {{if $.CanManage}}<form class="inline-form" method="post" action="/connections/{{$c.ID}}/credential" autocomplete="off">
+        <input type="password" name="secret" required autocomplete="new-password" placeholder="New credential" aria-label="New credential">
+        <button class="btn" type="submit">Replace and check</button>
+      </form>{{end}}
+      {{end}}
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <header class="panel-header"><h2>Tools</h2><span>{{$c.ToolCount}} available{{if eq $c.Kind "mcp_http" "mcp_stdio"}} · refreshed on every check{{end}}</span></header>
+  {{if $d.Tools}}
+  <table class="table">
+    <thead><tr><th>Tool</th><th>Type</th><th class="num">Agents</th><th>Description</th></tr></thead>
+    <tbody>{{range $d.Tools}}<tr>
+      <td><a class="mono" href="/tools/{{.ID}}">{{.ExposedName}}</a></td>
+      <td class="nowrap">{{kind .Kind}}</td>
+      <td class="num">{{.AgentCount}}</td>
+      <td class="muted">{{short .Description}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+  {{template "pager" $d.Pager}}
+  {{else}}
+  <div class="empty">{{if $d.Declarative}}No tools defined yet. {{if $.CanManage}}<a href="/tools/new?connection={{$c.ID}}">Define the first one</a>{{end}}.{{else}}No tools discovered yet. Run a check.{{end}}</div>
+  {{end}}
+</section>
+
+<div class="grid-2">
+  <section class="panel">
+    <header class="panel-header"><h2>Agents with access</h2></header>
+    {{if $d.Agents}}
+    <table class="table">
+      <thead><tr><th>Agent</th><th>Access</th><th class="num">Tools</th></tr></thead>
+      <tbody>{{range $d.Agents}}<tr>
+        <td><a href="/agents/{{.ID}}">{{.Name}}</a> <span class="badge badge-{{badge .Status}}">{{status .Status}}</span></td>
+        <td>{{if .Assigned}}Whole connection{{else}}<span class="muted">Individual tools</span>{{end}}</td>
+        <td class="num">{{.GrantedCount}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+    {{else}}<div class="empty">No agent has access to this connection.</div>{{end}}
+  </section>
+
+  <section class="panel">
+    <header class="panel-header"><h2>Check history</h2></header>
+    {{if $d.Checks}}
+    <table class="table">
+      <thead><tr><th>Time</th><th>Result</th><th class="num">Tools</th><th>Detail</th></tr></thead>
+      <tbody>{{range $d.Checks}}<tr>
+        <td class="muted nowrap">{{time .CheckedAt}}</td>
+        <td><span class="badge badge-{{badge .Status}}">{{status .Status}}</span></td>
+        <td class="num">{{.ToolCount}}</td>
+        <td class="muted small">{{if .Detail}}{{short .Detail}}{{else}}—{{end}}</td>
+      </tr>{{end}}</tbody>
+    </table>
+    {{else}}<div class="empty">Not checked yet.</div>{{end}}
+  </section>
+</div>
+
+<section class="panel panel-danger">
+  <header class="panel-header"><h2>Danger zone</h2></header>
+  <div class="panel-body danger-actions">
+    <div>
+      <strong>{{if eq $c.Status "disabled"}}Enable{{else}}Disable{{end}} connection</strong>
+      <p class="muted">{{if eq $c.Status "disabled"}}Resumes health checks and lets agents use its tools again.{{else}}Agents can no longer list or call its tools. Grants and credentials are kept.{{end}}</p>
+    </div>
+    {{if $.CanManage}}<form method="post" action="/connections/{{$c.ID}}/{{if eq $c.Status "disabled"}}enable{{else}}disable{{end}}"><button class="btn" type="submit">{{if eq $c.Status "disabled"}}Enable{{else}}Disable{{end}}</button></form>{{end}}
+  </div>
+  <div class="panel-body danger-actions">
+    <div>
+      <strong>Delete connection</strong>
+      <p class="muted">Removes its tools, grants, credential, and check history. Audit events keep their record without the link.</p>
+    </div>
+    {{if $.CanManage}}<form method="post" action="/connections/{{$c.ID}}/delete" data-confirm="Delete {{$c.Name}} and all of its tools? This cannot be undone."><button class="btn btn-danger" type="submit">Delete</button></form>{{end}}
+  </div>
+</section>
+{{end}}

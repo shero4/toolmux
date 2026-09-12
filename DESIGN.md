@@ -7,9 +7,10 @@ remote MCP servers, HTTP APIs, or installed commands. An agent authenticates to
 Toolmux. Toolmux authorizes the requested tool, adds the upstream credential,
 executes the typed adapter, and records the outcome.
 
-It is not an agent runtime, identity provider, secret manager, model gateway, or
-host sandbox. The operator trusts the Toolmux host and everything deliberately
-installed or configured on it.
+It also provides a model gateway with a shared provider/model catalog; the
+client owns model selection. It is not an agent runtime or host sandbox. The
+operator trusts the Toolmux host and everything deliberately installed or
+configured on it. See [MODEL_GATEWAY.md](MODEL_GATEWAY.md) for the adapter boundary.
 
 Runtime and control traffic are separate. `/mcp` accepts revocable per-agent
 tokens and enforces grants. `/admin/mcp` accepts a deterministic installation
@@ -55,7 +56,7 @@ later without changing the database or authorization model.
 - `agent_connections` retain imported connection assignments so newly discovered
   tools continue to flow to the same agents.
 - `grants` are atomic agent-to-tool permissions.
-- `connection_checks` retain health history.
+- `connection_checks` retain the most recent fifty results per connection.
 - `audit_events` retain authorization and invocation outcomes.
 
 Typed specifications are separated from the common catalog so grants, names,
@@ -79,7 +80,13 @@ and an `agent_installations` row in one database transaction.
 
 Hermes' root profile is considered an agent only when it is the active default
 profile. Hidden system-profile and nested group-chat metadata are deliberately
-excluded from identity discovery.
+excluded from identity discovery. Agent slugs derive from the runtime and
+profile, plus the environment when a candidate was found outside the local
+computer, so the same profile name in two places never collides.
+
+Candidates inside WSL are listed for visibility but skipped by the importer
+when Toolmux runs natively on Windows: their files and local MCP executables
+are not usable from that process.
 
 The dedicated Hermes import deliberately goes further: it reads each profile's
 MCP definitions and local OAuth artifacts, encrypts the credentials in Toolmux,
@@ -106,7 +113,33 @@ a Toolmux callback client. A rejected refresh changes the connection to
 
 For production, supply the master key through container secrets. Database
 backups are insufficient to decrypt credentials without the master key. The
-administration interface relies on host or reverse-proxy access control.
+administration interface requires a persistent administrator account created
+at first run. Passwords use bcrypt cost 12; browser session tokens are random,
+stored only as hashes, expire after 12 hours, and are revoked for the affected
+user when their password or access changes. Administrator, Operator, and Viewer
+roles gate browser routes server-side. User management requires Administrator;
+Viewer routes allow reads and personal password changes only. Role changes are
+serialized to preserve at least one active administrator. Login attempts are limited in PostgreSQL per remote address.
+Sessions use HttpOnly, SameSite=Lax cookies (for OAuth callbacks), same-origin
+POST validation, and Secure cookies when the
+configured public URL uses HTTPS. Browser pages are never cached.
+
+## Administration interface
+
+Pages are Go templates rendered on the server: one layout, shared partials, and
+one template per page, each parsed into its own template set so page bodies
+cannot collide. A single stylesheet and a small script are embedded in the
+binary; there is no bundler or framework. The script only adds conditional form
+fields, confirmations, clipboard copy, and immediate saving of tool grants;
+every action also works as a plain form submission.
+
+One-time messages, including a freshly issued token and its setup snippet, are
+kept in an in-memory store for ten minutes and referenced from the redirect
+URL by an opaque id that is consumed on first read. Tokens therefore never
+appear in browser history, referrers, or server logs.
+
+Browser POSTs are accepted only when their `Origin` or `Referer` matches the
+request host, or when neither header is present (non-browser clients).
 
 ## Execution boundaries
 
@@ -138,7 +171,7 @@ The connection status is `connected` only when all four are true. HTTP 401 and
 
 ## Deliberate omissions
 
-- LLM routing and metering
+- Automatic model selection, provider failover, pricing, and budget enforcement
 - prompt, memory, and agent orchestration
 - arbitrary shell strings or agent-selected executables
 - Kubernetes operators

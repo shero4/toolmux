@@ -165,11 +165,12 @@ func (h *Handler) call(w http.ResponseWriter, ctx context.Context, message reque
 		err = h.store.SetAgentConnection(ctx, args.AgentID, args.ConnectionID, *args.Enabled)
 		value = map[string]any{"updated": err == nil}
 	case "hermes_import":
-		var inventory importer.Inventory
-		inventory, err = h.importer.Scan(ctx)
+		var summary importer.Summary
+		summary, err = h.importer.ImportAll(ctx, h.importer.Scan(ctx))
 		if err == nil {
-			value, err = h.importer.ImportAll(ctx, inventory)
+			h.checker.CheckMany(summary.ConnectionIDs)
 		}
+		value = summary
 	default:
 		h.writeError(w, message.ID, -32601, "tool not found")
 		return

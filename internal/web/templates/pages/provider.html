@@ -1,0 +1,52 @@
+{{define "content"}}{{$p := .Data.Provider}}
+<header class="page-header"><div><p class="crumbs"><a href="/providers">Model providers</a> / {{if .Data.New}}New{{else}}{{$p.Name}}{{end}}</p><h1>{{if .Data.New}}Add model provider{{else}}{{$p.Name}}{{end}}</h1><p class="lede">Choose the provider's protocol and authentication independently.</p></div>{{if and (not .Data.New) $.CanManage}}<form method="post" action="/providers/{{$p.ID}}/discover"><button class="btn" type="submit">Discover models</button></form>{{end}}</header>
+<p class="access-notice"><a href="/auth/codex">Codex account and sign-in status</a>: <span data-codex-summary aria-live="polite">Checking…</span> · <a href="/operations">Authorization checks</a></p>
+<p class="muted"><a href="/providers/guide">Provider and subscription setup guide</a></p>
+{{with .Data.Error}}<div class="alert alert-error" role="alert">{{.}}</div>{{end}}
+{{if $.CanManage}}
+<form class="panel narrow form" method="post" action="/providers{{if not .Data.New}}/{{$p.ID}}{{end}}">
+<fieldset><legend>Provider</legend>
+<div class="field-row"><div class="field"><label for="name">Display name</label><input name="name" id="name" value="{{$p.Name}}" required maxlength="120" placeholder="My provider"></div><div class="field"><label for="slug">Model prefix</label><input name="slug" id="slug" value="{{$p.Slug}}" {{if not .Data.New}}readonly{{end}} required pattern="[a-z0-9][a-z0-9-]{0,79}" placeholder="my-provider"><span class="hint">Stable prefix used by clients, such as my-provider/model-id.</span></div></div>
+<div class="field"><label for="adapter">Protocol</label><select name="adapter" id="adapter" data-controls="provider-protocol">
+<option value="openai" {{if eq $p.Adapter "openai"}}selected{{end}}>OpenAI-compatible</option>
+<option value="anthropic" {{if eq $p.Adapter "anthropic"}}selected{{end}}>Anthropic-compatible</option>
+<option value="azure" {{if eq $p.Adapter "azure"}}selected{{end}}>Azure OpenAI — deployment API</option>
+<option value="litellm" {{if eq $p.Adapter "litellm"}}selected{{end}}>LiteLLM — translation and subscription providers</option>
+</select>
+<span class="hint" data-when="provider-protocol:openai">Chat Completions, Responses, completions, and embeddings, where supported upstream.</span>
+<span class="hint" data-when="provider-protocol:anthropic">Native Messages and token counting, including streaming and tool use. Use an Anthropic client; use LiteLLM for OpenAI clients.</span>
+<span class="hint" data-when="provider-protocol:azure">Enter the resource root URL. Model IDs must be Azure deployment names. For Azure's newer /openai/v1 API, choose OpenAI-compatible instead.</span>
+<span class="hint" data-when="provider-protocol:litellm">Connect a configured LiteLLM proxy for Anthropic/OpenAI translation, Gemini, Bedrock, Vertex, or ChatGPT/Codex subscription access.</span></div>
+<div class="field"><label for="base_url">API base URL</label><input type="url" id="base_url" name="base_url" value="{{$p.BaseURL}}" required placeholder="https://provider.example/v1"><span class="hint">OpenAI / LiteLLM: include the version path. Anthropic: root or /v1 URL. Azure deployment API: resource root.</span></div>
+<div class="field" data-when="provider-protocol:anthropic,azure"><label for="api_version">API version</label><input id="api_version" name="api_version" value="{{$p.Options.APIVersion}}" maxlength="80"><span class="hint">Anthropic defaults to 2023-06-01. Azure requires a version supported by your deployment.</span></div>
+</fieldset>
+<fieldset><legend>Authentication</legend>
+<div class="field"><label for="auth_type">Method</label><select id="auth_type" name="auth_type" data-controls="provider-auth">
+<option value="auto" {{if or (eq $p.Options.AuthType "") (eq $p.Options.AuthType "auto")}}selected{{end}}>Protocol default</option>
+<option value="bearer" {{if eq $p.Options.AuthType "bearer"}}selected{{end}}>Bearer token</option>
+<option value="header" {{if eq $p.Options.AuthType "header"}}selected{{end}}>API key in a custom header</option>
+<option value="basic" {{if eq $p.Options.AuthType "basic"}}selected{{end}}>Basic — username and password</option>
+<option value="oauth2" {{if eq $p.Options.AuthType "oauth2"}}selected{{end}}>OAuth 2.0 — client credentials</option>
+<option value="none" {{if eq $p.Options.AuthType "none"}}selected{{end}}>No built-in authentication</option>
+</select><span class="hint">Default: Bearer for OpenAI / LiteLLM, x-api-key for Anthropic, api-key for Azure.</span></div>
+<div class="field" data-when="provider-auth:header"><label for="auth_header">API key header name</label><input id="auth_header" name="auth_header" value="{{$p.Options.AuthHeader}}" placeholder="x-api-key"></div>
+<div class="field" data-when="provider-auth:basic"><label for="auth_username">Username</label><input id="auth_username" name="auth_username" value="{{$p.Options.Username}}" autocomplete="off"></div>
+<div data-when="provider-auth:oauth2">
+<div class="field"><label for="token_url">Token endpoint</label><input type="url" id="token_url" name="token_url" value="{{$p.Options.TokenURL}}" placeholder="https://identity.example/oauth/token"></div>
+<div class="field"><label for="client_id">Client ID</label><input id="client_id" name="client_id" value="{{$p.Options.ClientID}}"></div>
+<div class="field"><label for="token_auth">Client authentication</label><select id="token_auth" name="token_auth"><option value="basic" {{if ne $p.Options.TokenAuth "body"}}selected{{end}}>HTTP Basic</option><option value="body" {{if eq $p.Options.TokenAuth "body"}}selected{{end}}>Request body</option></select></div>
+<div class="field-row"><div class="field"><label for="scope">Scopes</label><input id="scope" name="scope" value="{{$p.Options.Scope}}" placeholder="Optional, space-separated"></div><div class="field"><label for="audience">Audience</label><input id="audience" name="audience" value="{{$p.Options.Audience}}" placeholder="Optional"></div></div>
+<p class="hint">Toolmux obtains and renews short-lived bearer tokens. Enter the client secret below. Interactive subscription sign-in is handled by the LiteLLM bridge.</p>
+</div>
+<div class="field" data-when="provider-auth:auto,bearer,header,basic,oauth2"><label for="api_key">API key, token, password, or client secret</label><input type="password" id="api_key" name="api_key" autocomplete="new-password"><span class="hint">Encrypted at rest and never shown again. Leave blank to keep the saved value.</span></div>
+<details><summary>Additional headers</summary><div class="field"><label for="headers">Header values (JSON)</label><textarea id="headers" name="headers" rows="3" spellcheck="false" autocomplete="off" placeholder='{"OpenAI-Organization": "org-id"}'></textarea><span class="hint">For organization, project, beta features, or custom gateway credentials. Values are encrypted. Blank keeps saved headers; {} clears them. For custom authorization headers, select No built-in authentication.</span></div></details>
+{{if not .Data.New}}<div class="field"><label><input type="checkbox" name="clear_credentials"> Clear saved credentials and headers on save</label><span class="hint">Any new values entered above will replace them.</span></div>{{end}}
+</fieldset>
+<fieldset><legend>Models and requests</legend>
+<div class="field field-narrow"><label for="timeout">Request timeout (seconds)</label><input type="number" id="timeout" name="timeout" value="{{$p.TimeoutSeconds}}" min="10" max="3600" required></div>
+<div class="field"><label><input type="checkbox" name="enabled" {{if $p.Enabled}}checked{{end}}> Enable this provider for all agents</label></div>
+<div class="field"><label for="models">Add model IDs</label><textarea name="models" id="models" rows="4" placeholder="One upstream model ID per line"></textarea><span class="hint">Optional if discovery is supported. Enter exact upstream IDs or Azure deployment names; existing models are kept.</span></div>
+</fieldset><div class="panel-foot form-actions"><button class="btn btn-primary" type="submit">Save provider</button><a class="btn btn-ghost" href="/providers">Cancel</a></div></form>
+{{else}}<div class="panel"><div class="panel-body"><p>Protocol: <strong>{{$p.Adapter}}</strong></p><p>API URL: <code>{{$p.BaseURL}}</code></p></div></div>{{end}}
+{{if not .Data.New}}<div class="panel"><div class="panel-header"><h2>Available models</h2><span>{{len .Data.Models}} models</span></div>{{if .Data.Models}}<table class="table"><thead><tr><th>Client model ID</th><th>Upstream model</th></tr></thead><tbody>{{range .Data.Models}}<tr><td><code>{{$p.Slug}}/{{.}}</code></td><td>{{.}}</td></tr>{{end}}</tbody></table>{{else}}<div class="empty">No model IDs saved. Some providers require manual model IDs or deployment names.</div>{{end}}</div>{{end}}
+{{end}}

@@ -1,0 +1,23 @@
+{{define "content"}}
+<header class="page-header"><div><h1>Users</h1><p class="lede">Manage who can sign in and what they can do. Only administrators can change user access.</p></div></header>
+{{with .Data.Error}}<div class="alert alert-error" role="alert">{{.}}</div>{{end}}
+<div class="panel"><table class="table"><thead><tr><th>Role</th><th>Access</th></tr></thead><tbody>
+<tr><td>Administrator</td><td>Manage users and roles, plus all operational configuration.</td></tr>
+<tr><td>Operator</td><td>Manage agents, tokens, tool grants, connections, credentials, and model providers. Cannot manage users or roles.</td></tr>
+<tr><td>Viewer</td><td>View dashboards, configuration, and activity. Cannot change configuration, issue tokens, or run checks.</td></tr>
+</tbody></table><div class="panel-foot">Every user can change their own password. Browser roles are separate from agent tokens. Disabling a browser user does not revoke independently issued agent tokens.</div></div>
+<section class="panel"><div class="panel-header"><h2>Accounts</h2><span>{{len .Data.Users}} users</span></div>
+{{range .Data.Users}}<form class="user-row panel-body" method="post" action="/users/{{.ID}}/access">
+<div><strong>{{.Username}}{{if eq .ID $.User.ID}} <span class="muted small">(you)</span>{{end}}</strong><span class="small muted block">Created {{time .CreatedAt}}</span></div>
+<label class="field">Role for {{.Username}}<select name="role" aria-label="Role for {{.Username}}"><option value="admin" {{if eq .Role "admin"}}selected{{end}}>Administrator</option><option value="operator" {{if eq .Role "operator"}}selected{{end}}>Operator</option><option value="viewer" {{if eq .Role "viewer"}}selected{{end}}>Viewer</option></select></label>
+<label class="nowrap"><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}}> Active</label>
+<button class="btn" type="submit">Save access</button>
+</form>{{end}}
+<div class="panel-foot">Saving access signs the user out. At least one active administrator must remain.</div></section>
+<form class="panel narrow form" method="post" action="/users"><fieldset><legend>Add user</legend>
+<div class="field"><label for="new-username">Username</label><input id="new-username" name="username" required maxlength="120" autocomplete="off"></div>
+<div class="field"><label for="new-role">Role</label><select id="new-role" name="role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Administrator</option></select></div>
+<div class="field"><label for="new-password">Initial password</label><input id="new-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="72" required></div>
+<div class="field"><label for="new-confirm">Confirm password</label><input id="new-confirm" type="password" name="confirm" autocomplete="new-password" minlength="12" maxlength="72" required></div>
+</fieldset><div class="panel-foot"><button class="btn btn-primary" type="submit">Create user</button></div></form>
+{{end}}

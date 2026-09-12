@@ -20,7 +20,11 @@ import (
 
 var ErrUnauthorized = errors.New("upstream rejected the credential")
 
-const maxMessageSize = 32 << 20
+const (
+	maxMessageSize  = 32 << 20
+	maxToolPages    = 100
+	upstreamTimeout = 5 * time.Minute
+)
 
 type Client struct {
 	http *http.Client
@@ -65,7 +69,7 @@ type wireTool struct {
 }
 
 func NewClient() *Client {
-	return &Client{http: &http.Client{Timeout: 45 * time.Second}}
+	return &Client{http: &http.Client{Timeout: upstreamTimeout}}
 }
 
 func (c *Client) Discover(ctx context.Context, connection store.Connection, credential store.Credential) ([]store.Tool, error) {
@@ -76,7 +80,10 @@ func (c *Client) Discover(ctx context.Context, connection store.Connection, cred
 	defer session.close(ctx)
 	var tools []store.Tool
 	cursor := ""
-	for {
+	for page := 0; ; page++ {
+		if page >= maxToolPages {
+			return nil, errors.New("upstream tool catalog did not end after 100 pages")
+		}
 		params := map[string]any{}
 		if cursor != "" {
 			params["cursor"] = cursor
@@ -238,7 +245,7 @@ func (s *session) send(ctx context.Context, payload rpcRequest, expectResponse b
 	if !expectResponse {
 		return rpcResponse{}, nil
 	}
-	return decodeResponse(resp)
+	return decodeResponse(resp, payload.ID)
 }
 
 func requestName(params any) string {
@@ -305,29 +312,53 @@ func asciiHeaderValue(value string) bool {
 	return true
 }
 
-func decodeResponse(resp *http.Response) (rpcResponse, error) {
-	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxMessageSize))
-		scanner.Buffer(make([]byte, 64<<10), maxMessageSize)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "data:") {
-				var response rpcResponse
-				if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &response); err == nil {
-					return response, nil
-				}
+// decodeResponse reads the JSON-RPC response with the given id. Event streams
+// may carry notifications first; those are skipped.
+func decodeResponse(resp *http.Response, id int64) (rpcResponse, error) {
+	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		var response rpcResponse
+		if err := json.NewDecoder(io.LimitReader(resp.Body, maxMessageSize)).Decode(&response); err != nil {
+			return rpcResponse{}, fmt.Errorf("decode upstream response: %w", err)
+		}
+		return response, nil
+	}
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxMessageSize))
+	scanner.Buffer(make([]byte, 64<<10), maxMessageSize)
+	var data []string
+	flush := func() (rpcResponse, bool) {
+		if len(data) == 0 {
+			return rpcResponse{}, false
+		}
+		payload := strings.Join(data, "\n")
+		data = data[:0]
+		var response rpcResponse
+		if json.Unmarshal([]byte(payload), &response) != nil {
+			return rpcResponse{}, false
+		}
+		var responseID int64
+		if len(response.ID) == 0 || json.Unmarshal(response.ID, &responseID) != nil || responseID != id {
+			return rpcResponse{}, false
+		}
+		return response, true
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "":
+			if response, ok := flush(); ok {
+				return response, nil
 			}
+		case strings.HasPrefix(line, "data:"):
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
-		if err := scanner.Err(); err != nil {
-			return rpcResponse{}, err
-		}
-		return rpcResponse{}, errors.New("upstream event stream contained no response")
 	}
-	var response rpcResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxMessageSize)).Decode(&response); err != nil {
-		return rpcResponse{}, fmt.Errorf("decode upstream response: %w", err)
+	if err := scanner.Err(); err != nil {
+		return rpcResponse{}, err
 	}
-	return response, nil
+	if response, ok := flush(); ok {
+		return response, nil
+	}
+	return rpcResponse{}, errors.New("upstream event stream contained no response")
 }
 
 func (s *session) close(ctx context.Context) {
@@ -347,7 +378,7 @@ func (s *session) close(ctx context.Context) {
 
 func (s *session) applyCredential(req *http.Request) {
 	token := s.credential.Bearer()
-	if token == "" {
+	if token == "" || s.connection.AuthMethod == "none" {
 		return
 	}
 	if s.connection.AuthMethod == "header" {

@@ -1,0 +1,19 @@
+# Optional protocol/authentication bridge. It can run beside native Toolmux
+# or on the same network as compose.yaml. It does not start other services.
+services:
+  models:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set a separate proxy key}
+      CHATGPT_TOKEN_DIR: /var/lib/litellm/chatgpt
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - ${LITELLM_CONFIG:-./deploy/litellm.example.yaml}:/app/config.yaml:ro
+      - model-auth:/var/lib/litellm
+    ports:
+      - "127.0.0.1:4000:4000"
+volumes:
+  model-auth:

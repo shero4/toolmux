@@ -1,877 +1,273 @@
+// Package web serves the administration interface and mounts the agent and
+// control endpoints. Pages are server-rendered Go templates with one CSS file
+// and a small script for progressive enhancement.
 package web
 
 import (
-	"context"
+	"bytes"
+	"crypto/sha256"
 	"embed"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
-	"strconv"
+	"path"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/shero4/toolmux/internal/checker"
 	"github.com/shero4/toolmux/internal/discovery"
+	"github.com/shero4/toolmux/internal/gateway"
 	"github.com/shero4/toolmux/internal/importer"
 	"github.com/shero4/toolmux/internal/oauth"
+	"github.com/shero4/toolmux/internal/operations"
 	"github.com/shero4/toolmux/internal/store"
 )
 
-//go:embed templates/*.html static/app.js static/bundle.css static/favicon.svg
+//go:embed templates static
 var assets embed.FS
 
 type Server struct {
-	store     *store.Store
-	checker   *checker.Checker
-	oauth     *oauth.Manager
-	discovery *discovery.Scanner
-	importer  *importer.Manager
-	baseURL   string
-	log       *slog.Logger
-	templates *template.Template
+	store        *store.Store
+	checker      *checker.Checker
+	oauth        *oauth.Manager
+	discovery    *discovery.Scanner
+	importer     *importer.Manager
+	baseURL      string
+	log          *slog.Logger
+	pages        map[string]*template.Template
+	flashes      *flashStore
+	assetVersion string
+	modelClient  *http.Client
+	operations   *operations.Monitor
+	rotationMu   sync.Mutex
 }
 
-type pageData struct {
-	Page, Title, Notice, Error, Token      string
-	Query, KindFilter, StatusFilter        string
-	DecisionFilter, ConnectionFilter       string
-	AgentFilter, ReturnURL                 string
-	Agents                                 []store.Agent
-	AgentOptions                           []store.Agent
-	Discovered                             []discovery.Candidate
-	Scanned                                bool
-	Setup                                  setupGuide
-	Agent                                  store.Agent
-	AgentTokens                            []store.AgentToken
-	Connections                            []store.Connection
-	ConnectionOptions                      []store.Connection
-	Tools                                  []store.Tool
-	Events                                 []store.AuditEvent
-	Hermes                                 importer.Inventory
-	AgentCount, ConnectionCount, ToolCount int
-	ConnectedCount, AttentionCount         int
-	Pager                                  pager
+// view is the data every page receives. Page-specific data lives in Data.
+type view struct {
+	User               store.User
+	CanManage, IsAdmin bool
+	Nav, Title         string
+	BaseURL            string
+	Endpoint           string
+	ReturnURL          string // current page without the flash id, for return_url fields
+	AssetVersion       string
+	Flash              *flash
+	Data               any
 }
 
-type pager struct {
-	Page, Pages, Total, From, To int
-	PreviousURL, NextURL         string
-	HasPrevious, HasNext         bool
-}
-
-type setupGuide struct {
-	Title, Destination, Config, Note string
-}
-
-var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, discoveryScanner *discovery.Scanner, hermesImporter *importer.Manager, baseURL string, log *slog.Logger) (*Server, error) {
-	functions := template.FuncMap{"date": func(value *time.Time) string {
-		if value == nil {
-			return "Never"
-		}
-		return value.Local().Format("Jan 2, 15:04")
-	}, "time": func(value time.Time) string { return value.Local().Format("Jan 2, 15:04:05") }, "status": statusLabel, "kind": kindLabel, "runtime": runtimeLabel, "short": func(value string) string {
-		const limit = 220
-		value = strings.TrimSpace(value)
-		if len(value) <= limit {
-			return value
-		}
-		return strings.TrimSpace(value[:limit]) + "…"
-	}}
-	templates, err := template.New("pages.html").Funcs(functions).ParseFS(assets, "templates/*.html")
+func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, scanner *discovery.Scanner, hermes *importer.Manager, baseURL string, log *slog.Logger) (*Server, error) {
+	s := &Server{store: store, checker: check, oauth: oauth, discovery: scanner, importer: hermes, baseURL: strings.TrimRight(baseURL, "/"), log: log, pages: make(map[string]*template.Template), flashes: newFlashStore()}
+	version, err := assetVersion()
 	if err != nil {
 		return nil, err
 	}
-	return &Server{store: store, checker: check, oauth: oauth, discovery: discoveryScanner, importer: hermesImporter, baseURL: strings.TrimRight(baseURL, "/"), log: log, templates: templates}, nil
-}
-
-func statusLabel(value string) string {
-	switch value {
-	case "reauthorization_required":
-		return "Needs authorization"
-	case "active":
-		return "Active"
-	case "connected":
-		return "Connected"
-	case "checking":
-		return "Checking"
-	case "degraded":
-		return "Degraded"
-	case "unreachable":
-		return "Unreachable"
-	case "disabled":
-		return "Disabled"
-	default:
-		return strings.ReplaceAll(value, "_", " ")
+	s.assetVersion = version
+	s.operations = operations.New(store, check)
+	s.modelClient = gateway.Client()
+	base, err := template.New("").Funcs(functions()).ParseFS(assets, "templates/layout.html", "templates/partials.html")
+	if err != nil {
+		return nil, err
 	}
-}
-
-func kindLabel(value string) string {
-	switch value {
-	case "mcp_http":
-		return "Remote MCP"
-	case "mcp_stdio":
-		return "Local MCP"
-	case "http_api":
-		return "HTTP API"
-	case "mcp":
-		return "MCP"
-	case "http":
-		return "HTTP"
-	case "command":
-		return "Command"
-	default:
-		return value
+	pageFiles, err := fs.Glob(assets, "templates/pages/*.html")
+	if err != nil {
+		return nil, err
 	}
-}
-
-func runtimeLabel(value string) string {
-	switch strings.ToLower(value) {
-	case "hermes":
-		return "Hermes"
-	case "openclaw":
-		return "OpenClaw"
-	default:
-		return value
+	for _, file := range pageFiles {
+		page, err := template.Must(base.Clone()).ParseFS(assets, file)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", file, err)
+		}
+		s.pages[strings.TrimSuffix(path.Base(file), ".html")] = page
 	}
+	return s, nil
 }
 
-func (s *Server) Handler(mcpHandler, adminHandler http.Handler) http.Handler {
+// assetVersion fingerprints the static assets so browsers can cache them
+// indefinitely and still pick up new builds.
+func assetVersion() (string, error) {
+	digest := sha256.New()
+	for _, name := range []string{"static/app.css", "static/app.js"} {
+		data, err := assets.ReadFile(name)
+		if err != nil {
+			return "", err
+		}
+		digest.Write(data)
+	}
+	return hex.EncodeToString(digest.Sum(nil))[:12], nil
+}
+
+func (s *Server) Handler(mcpHandler, adminHandler http.Handler, inference ...http.Handler) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/", http.FileServer(http.FS(assets)))
+	static, _ := fs.Sub(assets, "static")
+	mux.Handle("GET /static/", http.StripPrefix("/static/", cacheForever(http.FileServer(http.FS(static)))))
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/admin/mcp", adminHandler)
+	if len(inference) > 0 {
+		mux.Handle("/v1/", inference[0])
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.HandleFunc("GET /{$}", s.dashboard)
-	mux.HandleFunc("GET /connections", s.connections)
-	mux.HandleFunc("POST /connections", s.createConnection)
-	mux.HandleFunc("POST /connections/{id}/check", s.checkConnection)
-	mux.HandleFunc("POST /connections/{id}/credential", s.updateConnectionCredential)
-	mux.HandleFunc("GET /connections/{id}/authorize", s.authorizeConnection)
-	mux.HandleFunc("GET /oauth/callback", s.oauthCallback)
+
+	mux.HandleFunc("GET /{$}", s.overview)
+	mux.HandleFunc("GET /setup", s.authForm)
+	mux.HandleFunc("POST /setup", s.submitAuth)
+	mux.HandleFunc("GET /login", s.authForm)
+	mux.HandleFunc("POST /login", s.submitAuth)
+	mux.HandleFunc("POST /logout", s.logout)
+	mux.HandleFunc("GET /settings", s.settings)
+	mux.HandleFunc("POST /settings/password", s.changePassword)
+	mux.HandleFunc("POST /settings/monitoring", s.saveMonitoring)
+	mux.HandleFunc("POST /settings/webhook/test", s.testWebhook)
+	mux.HandleFunc("GET /operations", s.operationLogs)
+	mux.HandleFunc("POST /operations/check", s.checkNow)
+	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) {
+		s.render(w, r, 200, "docs", "docs", "Documentation", nil)
+	})
+	mux.HandleFunc("GET /auth/codex", s.codexPage)
+	mux.HandleFunc("GET /auth/codex/status", s.codexStatus)
+	mux.HandleFunc("POST /auth/codex", s.codexLogin)
+	mux.HandleFunc("GET /agents/{id}/tokens/{tokenID}/rotate", s.rotatePreview)
+	mux.HandleFunc("POST /agents/{id}/tokens/{tokenID}/rotate", s.rotateToken)
+	mux.HandleFunc("GET /users", s.users)
+	mux.HandleFunc("POST /users", s.createUser)
+	mux.HandleFunc("POST /users/{id}/access", s.setUserAccess)
+	mux.HandleFunc("GET /providers", s.providers)
+	mux.HandleFunc("GET /providers/guide", func(w http.ResponseWriter, r *http.Request) {
+		s.render(w, r, 200, "provider-guide", "providers", "Provider setup", nil)
+	})
+	mux.HandleFunc("GET /providers/new", s.provider)
+	mux.HandleFunc("POST /providers", s.saveProvider)
+	mux.HandleFunc("GET /providers/{id}", s.provider)
+	mux.HandleFunc("POST /providers/{id}", s.saveProvider)
+	mux.HandleFunc("POST /providers/{id}/discover", s.discoverModels)
+
 	mux.HandleFunc("GET /agents", s.agents)
-	mux.HandleFunc("POST /agents/import", s.importAgent)
-	mux.HandleFunc("GET /imports/hermes", s.hermesImport)
-	mux.HandleFunc("POST /imports/hermes", s.importHermes)
-	mux.HandleFunc("GET /tools", s.tools)
-	mux.HandleFunc("POST /tools", s.createTool)
+	mux.HandleFunc("GET /agents/new", s.newAgent)
 	mux.HandleFunc("POST /agents", s.createAgent)
-	mux.HandleFunc("GET /agents/{id}", s.agentAccess)
-	mux.HandleFunc("POST /agents/{id}/grants", s.saveGrants)
+	mux.HandleFunc("GET /agents/discover", s.discover)
+	mux.HandleFunc("POST /agents/import", s.importCandidate)
+	mux.HandleFunc("POST /agents/import/hermes", s.importHermes)
+	mux.HandleFunc("GET /agents/{id}", s.agent)
 	mux.HandleFunc("POST /agents/{id}/tokens", s.issueAgentToken)
 	mux.HandleFunc("POST /agents/{id}/tokens/{tokenID}/revoke", s.revokeAgentToken)
+	mux.HandleFunc("POST /agents/{id}/grants", s.saveGrants)
 	mux.HandleFunc("POST /agents/{id}/connections/{connectionID}", s.setAgentConnection)
 	mux.HandleFunc("POST /agents/{id}/disable", s.disableAgent)
+	mux.HandleFunc("POST /agents/{id}/enable", s.enableAgent)
 	mux.HandleFunc("POST /agents/{id}/delete", s.deleteAgent)
+
+	mux.HandleFunc("GET /connections", s.connections)
+	mux.HandleFunc("GET /connections/new", s.newConnection)
+	mux.HandleFunc("POST /connections", s.createConnection)
+	mux.HandleFunc("GET /connections/{id}", s.connection)
+	mux.HandleFunc("POST /connections/{id}/check", s.checkConnection)
+	mux.HandleFunc("POST /connections/{id}/credential", s.updateConnectionCredential)
+	mux.HandleFunc("POST /connections/{id}/authorize", s.authorizeConnection)
+	mux.HandleFunc("POST /connections/{id}/enable", s.enableConnection)
+	mux.HandleFunc("POST /connections/{id}/disable", s.disableConnection)
+	mux.HandleFunc("POST /connections/{id}/delete", s.deleteConnection)
+	mux.HandleFunc("GET /oauth/callback", s.oauthCallback)
+
+	mux.HandleFunc("GET /tools", s.tools)
+	mux.HandleFunc("GET /tools/new", s.newTool)
+	mux.HandleFunc("POST /tools", s.createTool)
+	mux.HandleFunc("GET /tools/{id}", s.tool)
+	mux.HandleFunc("POST /tools/{id}/delete", s.deleteTool)
+
 	mux.HandleFunc("GET /activity", s.activity)
-	return s.securityHeaders(s.sameOrigin(mux))
+
+	return securityHeaders(sameOrigin(s.authenticated(mux)))
 }
 
-func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	agents, connections, tools, err := s.store.Summary(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	items, _ := s.store.ListConnections(r.Context())
-	connected, attention := 0, 0
-	for _, item := range items {
-		if item.Status == "connected" {
-			connected++
-		} else {
-			attention++
-		}
-	}
-	if len(items) > 6 {
-		items = items[:6]
-	}
-	events, _ := s.store.ListAudit(r.Context(), 8)
-	s.render(w, pageData{Page: "dashboard", Title: "Setup", AgentCount: agents, ConnectionCount: connections, ToolCount: tools, ConnectedCount: connected, AttentionCount: attention, Connections: items, Events: events})
-}
-func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ListConnections(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	kind, status := r.URL.Query().Get("kind"), r.URL.Query().Get("status")
-	filtered := items[:0]
-	for _, item := range items {
-		matchesQuery := query == "" || containsFold(item.Name, query) || containsFold(item.ConnectorName, query) || containsFold(item.Slug, query)
-		if matchesQuery && (kind == "" || item.Kind == kind) && (status == "" || item.Status == status) {
-			filtered = append(filtered, item)
-		}
-	}
-	page := pageNumber(r)
-	pagination := newPager(r, page, len(filtered), 15)
-	filtered = pageSlice(filtered, pagination, 15)
-	s.render(w, pageData{Page: "connections", Title: "Connections", Connections: filtered, Query: query, KindFilter: kind, StatusFilter: status, Pager: pagination, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
-}
-func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ListAgents(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	allItems := items
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if query != "" {
-		items = nil
-		for _, item := range allItems {
-			if containsFold(item.Name, query) || containsFold(item.Slug, query) || containsFold(item.Runtime, query) || containsFold(item.Profile, query) {
-				items = append(items, item)
-			}
-		}
-	}
-	page := pageNumber(r)
-	const pageSize = 20
-	pagination := newPager(r, page, len(items), pageSize)
-	items = pageSlice(items, pagination, pageSize)
-	data := pageData{Page: "agents", Title: "Agents", Agents: items, Query: query, Pager: pagination, Token: r.URL.Query().Get("token"), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")}
-	if r.URL.Query().Get("discover") == "1" {
-		data.Scanned = true
-		imported := make(map[string]bool)
-		for _, agent := range allItems {
-			imported[agent.SourceKey] = true
-		}
-		for _, candidate := range s.discovery.Scan(r.Context()) {
-			if !imported[candidate.ID] {
-				data.Discovered = append(data.Discovered, candidate)
-			}
-		}
-	}
-	if data.Token != "" {
-		if agent, err := s.store.GetAgent(r.Context(), r.URL.Query().Get("agent")); err == nil {
-			data.Setup = s.setupGuide(agent, data.Token)
-		}
-	}
-	s.render(w, data)
-}
-
-func (s *Server) hermesImport(w http.ResponseWriter, r *http.Request) {
-	inventory, err := s.importer.Scan(r.Context())
-	if err != nil {
-		s.log.Error("scan Hermes configuration", "error", err)
-		s.render(w, pageData{Page: "hermes-import", Title: "Import Hermes", Error: "Hermes configurations could not be read."})
-		return
-	}
-	s.render(w, pageData{Page: "hermes-import", Title: "Import Hermes", Hermes: inventory, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
-}
-
-func (s *Server) importHermes(w http.ResponseWriter, r *http.Request) {
-	inventory, err := s.importer.Scan(r.Context())
-	if err != nil {
-		s.redirectError(w, r, "/imports/hermes", "Hermes configurations could not be read")
-		return
-	}
-	if len(inventory.Profiles) == 0 {
-		s.redirectError(w, r, "/imports/hermes", "No Hermes profiles were found")
-		return
-	}
-	summary, err := s.importer.ImportAll(r.Context(), inventory)
-	if err != nil {
-		s.log.Error("import Hermes configuration", "error", err)
-		s.redirectError(w, r, "/imports/hermes", "The Hermes import stopped before it completed")
-		return
-	}
-	connectionIDs := append([]string(nil), summary.ConnectionIDs...)
-	go func() {
-		seen := make(map[string]bool)
-		sem := make(chan struct{}, 4)
-		var checks sync.WaitGroup
-		for _, id := range connectionIDs {
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			checks.Add(1)
-			go func(connectionID string) {
-				defer checks.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-				defer cancel()
-				s.runCheck(ctx, connectionID)
-			}(id)
-		}
-		checks.Wait()
-	}()
-	message := fmt.Sprintf("Imported %d agents and %d connections. Connection checks are running.", summary.AgentsCreated, summary.ConnectionsCreated)
-	if summary.ConfigsUpdated > 0 {
-		message += fmt.Sprintf(" Connected %d Hermes profiles to Toolmux.", summary.ConfigsUpdated)
-	}
-	if len(summary.Warnings) > 0 {
-		message += fmt.Sprintf(" %d profile configurations need attention.", len(summary.Warnings))
-		for _, warning := range summary.Warnings {
-			s.log.Warn("Hermes configuration needs attention", "detail", warning)
-		}
-	}
-	http.Redirect(w, r, "/connections?notice="+url.QueryEscape(message), http.StatusSeeOther)
-}
-
-func (s *Server) importAgent(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/agents?discover=1", "Invalid form")
-		return
-	}
-	candidate, ok := s.discovery.Find(r.Context(), r.FormValue("candidate_id"))
+// render executes a page into a buffer first so a template failure produces a
+// clean error instead of a half-written response.
+func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page, nav, title string, data any) {
+	tmpl, ok := s.pages[page]
 	if !ok {
-		s.redirectError(w, r, "/agents?discover=1", "That agent configuration is no longer available")
+		s.fail(w, fmt.Errorf("unknown page %q", page))
 		return
 	}
-	slug := store.Slug(candidate.Runtime + "-" + candidate.Profile)
-	agent, token, err := s.store.CreateDiscoveredAgent(r.Context(), candidate.Name, slug, candidate.ID, candidate.Runtime, candidate.Profile, candidate.Environment, candidate.ConfigPath)
-	if err != nil {
-		s.log.Error("import discovered agent", "error", err)
-		s.redirectError(w, r, "/agents?discover=1", "Could not import this agent; it may already exist")
+	v := view{Nav: nav, Title: title, BaseURL: s.baseURL, Endpoint: s.baseURL + "/mcp", ReturnURL: currentPage(r), AssetVersion: s.assetVersion, Flash: s.flashes.take(r.URL.Query().Get("f")), Data: data}
+	v.User = currentUser(r)
+	v.CanManage = v.User.CanManage()
+	v.IsAdmin = v.User.IsAdmin()
+	if !v.CanManage && v.Flash != nil {
+		v.Flash.Token = ""
+		v.Flash.Setup = nil
+	}
+	var buffer bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buffer, "layout", v); err != nil {
+		s.fail(w, fmt.Errorf("render %s: %w", page, err))
 		return
 	}
-	target := "/agents?notice=" + url.QueryEscape("Agent imported. Connect it with the configuration below; the token will not be shown again.") + "&token=" + url.QueryEscape(token) + "&agent=" + url.QueryEscape(agent.ID)
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-func (s *Server) tools(w http.ResponseWriter, r *http.Request) {
-	connections, err := s.store.ListConnections(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	kind, connectionID := r.URL.Query().Get("kind"), r.URL.Query().Get("connection")
-	page := pageNumber(r)
-	const pageSize = 25
-	items, total, err := s.store.SearchTools(r.Context(), query, kind, connectionID, pageSize, (page-1)*pageSize)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	pagination := newPager(r, page, total, pageSize)
-	if pagination.Page != page {
-		items, _, err = s.store.SearchTools(r.Context(), query, kind, connectionID, pageSize, (pagination.Page-1)*pageSize)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-	}
-	s.render(w, pageData{Page: "tools", Title: "Tools", Tools: items, ConnectionOptions: connections, Query: query, KindFilter: kind, ConnectionFilter: connectionID, Pager: pagination, Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")})
-}
-func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.store.ListAgents(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	decision, agentID := r.URL.Query().Get("decision"), r.URL.Query().Get("agent")
-	page := pageNumber(r)
-	const pageSize = 30
-	events, total, err := s.store.SearchAudit(r.Context(), query, decision, agentID, pageSize, (page-1)*pageSize)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	pagination := newPager(r, page, total, pageSize)
-	if pagination.Page != page {
-		events, _, err = s.store.SearchAudit(r.Context(), query, decision, agentID, pageSize, (pagination.Page-1)*pageSize)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-	}
-	s.render(w, pageData{Page: "activity", Title: "Activity", Events: events, AgentOptions: agents, Query: query, DecisionFilter: decision, AgentFilter: agentID, Pager: pagination})
-}
-
-func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/agents", "Invalid form")
-		return
-	}
-	name := strings.TrimSpace(r.FormValue("name"))
-	slug := store.Slug(r.FormValue("slug"))
-	if slug == "" {
-		slug = store.Slug(name)
-	}
-	if name == "" || slug == "" {
-		s.redirectError(w, r, "/agents", "Name and slug are required")
-		return
-	}
-	agent, token, err := s.store.CreateAgent(r.Context(), name, slug)
-	if err != nil {
-		s.redirectError(w, r, "/agents", "Could not create agent")
-		return
-	}
-	http.Redirect(w, r, "/agents?notice="+url.QueryEscape("Agent created. Connect it with the configuration below; the token will not be shown again.")+"&token="+url.QueryEscape(token)+"&agent="+url.QueryEscape(agent.ID), http.StatusSeeOther)
-}
-
-func (s *Server) setupGuide(agent store.Agent, token string) setupGuide {
-	endpoint := s.baseURL + "/mcp"
-	switch agent.Runtime {
-	case "hermes":
-		config := "mcp_servers:\n  toolmux:\n    url: \"" + endpoint + "\"\n    headers:\n      Authorization: \"Bearer " + token + "\"\n    enabled: true\n    supports_parallel_tool_calls: true"
-		return setupGuide{Title: "Connect Hermes", Destination: agent.ConfigPath, Config: config, Note: "Merge this server into mcp_servers, then restart that Hermes profile."}
-	case "openclaw":
-		serverName := "toolmux-" + agent.Slug
-		payload, _ := json.Marshal(map[string]any{"url": endpoint, "transport": "streamable-http", "headers": map[string]string{"Authorization": "Bearer " + token}})
-		command := "openclaw mcp set " + serverName + " '" + string(payload) + "'"
-		return setupGuide{Title: "Connect OpenClaw", Destination: agent.ConfigPath, Config: command, Note: "Run this in the detected environment, then run openclaw mcp probe " + serverName + "."}
-	default:
-		return setupGuide{Title: "Connect this agent", Destination: "MCP client settings", Config: "URL: " + endpoint + "\nAuthorization: Bearer " + token, Note: "Use Streamable HTTP transport."}
-	}
-}
-
-func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/connections", "Invalid form")
-		return
-	}
-	connector := strings.TrimSpace(r.FormValue("connector_name"))
-	connectorSlug := store.Slug(r.FormValue("connector_slug"))
-	if connectorSlug == "" {
-		connectorSlug = store.Slug(connector)
-	}
-	name := strings.TrimSpace(r.FormValue("name"))
-	connectionSlug := store.Slug(r.FormValue("connection_slug"))
-	if connectionSlug == "" {
-		connectionSlug = store.Slug(name)
-	}
-	endpoint := strings.TrimSpace(r.FormValue("endpoint_url"))
-	kind := r.FormValue("kind")
-	healthPath := strings.TrimSpace(r.FormValue("health_path"))
-	auth := r.FormValue("auth_method")
-	authName := strings.TrimSpace(r.FormValue("auth_name"))
-	secret := strings.TrimSpace(r.FormValue("secret"))
-	if kind != "mcp_http" && kind != "http_api" && kind != "command" {
-		s.redirectError(w, r, "/connections", "Choose a supported connection type")
-		return
-	}
-	if connector == "" || connectorSlug == "" || name == "" || connectionSlug == "" || (kind != "command" && !validHTTPURL(endpoint)) {
-		s.redirectError(w, r, "/connections", "Enter names and a valid HTTP endpoint")
-		return
-	}
-	if healthPath != "" && !strings.HasPrefix(healthPath, "/") {
-		s.redirectError(w, r, "/connections", "Health path must start with /")
-		return
-	}
-	if auth != "none" && auth != "bearer" && auth != "header" && auth != "oauth2" {
-		s.redirectError(w, r, "/connections", "Unsupported authorization method")
-		return
-	}
-	if (auth == "bearer" || auth == "header") && secret == "" {
-		s.redirectError(w, r, "/connections", "A credential is required")
-		return
-	}
-	if auth == "header" && authName == "" {
-		s.redirectError(w, r, "/connections", "Enter the API credential header name")
-		return
-	}
-	var oauthConfig *store.OAuthConfig
-	if auth == "oauth2" {
-		authorizationURL := strings.TrimSpace(r.FormValue("authorization_url"))
-		tokenURL := strings.TrimSpace(r.FormValue("token_url"))
-		clientID := strings.TrimSpace(r.FormValue("client_id"))
-		tokenAuthMethod := r.FormValue("token_auth_method")
-		if tokenAuthMethod == "" {
-			tokenAuthMethod = "client_secret_basic"
-		}
-		if !validHTTPURL(authorizationURL) || !validHTTPURL(tokenURL) || clientID == "" || (tokenAuthMethod != "client_secret_basic" && tokenAuthMethod != "client_secret_post") {
-			s.redirectError(w, r, "/connections", "OAuth authorization URL, token URL, and client ID are required")
-			return
-		}
-		oauthConfig = &store.OAuthConfig{AuthorizationURL: authorizationURL, TokenURL: tokenURL, ClientID: clientID, Scopes: strings.TrimSpace(r.FormValue("scopes")), TokenAuthMethod: tokenAuthMethod}
-	}
-	id, err := s.store.CreateConnection(r.Context(), kind, connector, connectorSlug, endpoint, healthPath, name, connectionSlug, auth, authName, secret, oauthConfig)
-	if err != nil {
-		s.log.Error("create connection", "error", err)
-		s.redirectError(w, r, "/connections", "Could not create connection")
-		return
-	}
-	s.runCheck(r.Context(), id)
-	http.Redirect(w, r, "/connections?notice="+url.QueryEscape("Connection created and checked."), http.StatusSeeOther)
-}
-
-func (s *Server) createTool(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/tools", "Invalid form")
-		return
-	}
-	kind := r.FormValue("kind")
-	connectionID := r.FormValue("connection_id")
-	name := strings.TrimSpace(r.FormValue("name"))
-	title := strings.TrimSpace(r.FormValue("title"))
-	description := strings.TrimSpace(r.FormValue("description"))
-	inputSchema := json.RawMessage(strings.TrimSpace(r.FormValue("input_schema")))
-	if connectionID == "" || !toolNamePattern.MatchString(name) || !validJSONObject(inputSchema) {
-		s.redirectError(w, r, "/tools", "Choose a connection, use a simple tool name, and provide a JSON object schema")
-		return
-	}
-	var err error
-	switch kind {
-	case "http":
-		method := strings.ToUpper(r.FormValue("method"))
-		location := strings.TrimSpace(r.FormValue("url_template"))
-		query := jsonOrDefault(r.FormValue("query_template"), `{}`)
-		headers := jsonOrDefault(r.FormValue("headers_template"), `{}`)
-		body := jsonOrDefault(r.FormValue("body_template"), `null`)
-		if !validURLTemplate(location) || !validStringMap(query) || !validStringMap(headers) || !json.Valid(body) {
-			s.redirectError(w, r, "/tools", "HTTP URL and JSON templates are invalid")
-			return
-		}
-		err = s.store.CreateHTTPTool(r.Context(), connectionID, name, title, description, inputSchema, store.HTTPToolSpec{Method: method, URLTemplate: location, QueryTemplate: query, HeadersTemplate: headers, BodyTemplate: body, TimeoutMS: durationMS(r.FormValue("http_timeout_seconds"), 60), MaxResponseBytes: 4 << 20})
-	case "command":
-		executable := strings.TrimSpace(r.FormValue("executable"))
-		workingDirectory := strings.TrimSpace(r.FormValue("working_directory"))
-		args := jsonOrDefault(r.FormValue("args_template"), `[]`)
-		stdinMode := r.FormValue("stdin_mode")
-		credentialEnv := strings.TrimSpace(r.FormValue("credential_env"))
-		var values []string
-		if executable == "" || json.Unmarshal(args, &values) != nil || (stdinMode != "none" && stdinMode != "json") {
-			s.redirectError(w, r, "/tools", "Command executable or arguments are invalid")
-			return
-		}
-		err = s.store.CreateCommandTool(r.Context(), connectionID, name, title, description, inputSchema, store.CommandToolSpec{Executable: executable, WorkingDirectory: workingDirectory, ArgsTemplate: args, StdinMode: stdinMode, CredentialEnv: credentialEnv, TimeoutMS: durationMS(r.FormValue("command_timeout_seconds"), 60), MaxOutputBytes: 4 << 20})
-	default:
-		s.redirectError(w, r, "/tools", "Choose HTTP API or command")
-		return
-	}
-	if err != nil {
-		s.log.Error("create tool", "error", err)
-		s.redirectError(w, r, "/tools", "Could not create tool; check that its type matches the connection")
-		return
-	}
-	_ = s.checker.Check(r.Context(), connectionID)
-	http.Redirect(w, r, "/tools?notice="+url.QueryEscape("Tool created."), http.StatusSeeOther)
-}
-
-func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request) {
-	target, err := s.oauth.Start(r.Context(), r.PathValue("id"))
-	if err != nil {
-		s.redirectError(w, r, "/connections", "Could not begin OAuth authorization")
-		return
-	}
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
-	if providerError := r.URL.Query().Get("error"); providerError != "" {
-		s.redirectError(w, r, "/connections", "OAuth authorization was not completed: "+providerError)
-		return
-	}
-	stateValue, code := r.URL.Query().Get("state"), r.URL.Query().Get("code")
-	if stateValue == "" || code == "" {
-		s.redirectError(w, r, "/connections", "OAuth callback was incomplete")
-		return
-	}
-	connectionID, err := s.oauth.Complete(r.Context(), stateValue, code)
-	if err != nil {
-		s.log.Error("complete OAuth authorization", "error", err)
-		s.redirectError(w, r, "/connections", "OAuth token exchange failed")
-		return
-	}
-	if err := s.checker.Check(r.Context(), connectionID); err != nil {
-		s.log.Error("check OAuth connection", "error", err)
-	}
-	http.Redirect(w, r, "/connections?notice="+url.QueryEscape("OAuth connection authorized."), http.StatusSeeOther)
-}
-
-func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	s.runCheck(r.Context(), id)
-	http.Redirect(w, r, "/connections?notice="+url.QueryEscape("Connection check completed."), http.StatusSeeOther)
-}
-
-func (s *Server) updateConnectionCredential(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	connection, _, err := s.store.GetConnection(r.Context(), id)
-	if err != nil {
-		s.redirectError(w, r, "/connections", "Connection not found")
-		return
-	}
-	if connection.AuthMethod != "bearer" && connection.AuthMethod != "header" {
-		s.redirectError(w, r, "/connections", "This connection does not use a replaceable key")
-		return
-	}
-	if err := r.ParseForm(); err != nil || strings.TrimSpace(r.FormValue("secret")) == "" {
-		s.redirectError(w, r, "/connections", "Enter a credential")
-		return
-	}
-	if err := s.store.SaveCredential(r.Context(), id, store.Credential{BearerToken: strings.TrimSpace(r.FormValue("secret"))}); err != nil {
-		s.redirectError(w, r, "/connections", "The credential could not be saved")
-		return
-	}
-	s.runCheck(r.Context(), id)
-	http.Redirect(w, r, "/connections?notice="+url.QueryEscape("Credential updated and checked."), http.StatusSeeOther)
-}
-
-func (s *Server) runCheck(ctx context.Context, id string) {
-	if err := s.checker.Check(ctx, id); err != nil {
-		s.log.Error("check connection", "error", err)
-	}
-}
-
-func (s *Server) agentAccess(w http.ResponseWriter, r *http.Request) {
-	agent, err := s.store.GetAgent(r.Context(), r.PathValue("id"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	connections, err := s.store.ConnectionsForAgent(r.Context(), agent.ID)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	tokens, err := s.store.ListAgentTokens(r.Context(), agent.ID)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	kind, connectionID := r.URL.Query().Get("kind"), r.URL.Query().Get("connection")
-	page := pageNumber(r)
-	const pageSize = 40
-	tools, total, err := s.store.SearchToolsForAgentGrant(r.Context(), agent.ID, query, kind, connectionID, pageSize, (page-1)*pageSize)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	pagination := newPager(r, page, total, pageSize)
-	if pagination.Page != page {
-		tools, _, err = s.store.SearchToolsForAgentGrant(r.Context(), agent.ID, query, kind, connectionID, pageSize, (pagination.Page-1)*pageSize)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-	}
-	returnURL := r.URL.RequestURI()
-	data := pageData{Page: "agent-access", Title: "Agent access", Agent: agent, AgentTokens: tokens, Tools: tools, ConnectionOptions: connections, Query: query, KindFilter: kind, ConnectionFilter: connectionID, Pager: pagination, ReturnURL: returnURL, Token: r.URL.Query().Get("token"), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error")}
-	if data.Token != "" {
-		data.Setup = s.setupGuide(agent, data.Token)
-	}
-	s.render(w, data)
-}
-
-func (s *Server) issueAgentToken(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/agents/"+id, "Invalid form")
-		return
-	}
-	label := strings.TrimSpace(r.FormValue("label"))
-	if label == "" {
-		label = "runtime"
-	}
-	if len(label) > 80 {
-		s.redirectError(w, r, "/agents/"+id, "Token label is too long")
-		return
-	}
-	token, err := s.store.IssueAgentToken(r.Context(), id, label)
-	if err != nil {
-		s.redirectError(w, r, "/agents/"+id, "Could not issue token")
-		return
-	}
-	target := "/agents/" + id + "?notice=" + url.QueryEscape("Token issued. Copy it now; it will not be shown again.") + "&token=" + url.QueryEscape(token)
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (s *Server) revokeAgentToken(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := s.store.RevokeAgentTokenByID(r.Context(), id, r.PathValue("tokenID")); err != nil {
-		s.redirectError(w, r, "/agents/"+id, "Could not revoke token")
-		return
-	}
-	http.Redirect(w, r, "/agents/"+id+"?notice="+url.QueryEscape("Token revoked."), http.StatusSeeOther)
-}
-func (s *Server) saveGrants(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/agents/"+id, "Invalid form")
-		return
-	}
-	async := r.Header.Get("X-Toolmux-Async") == "true"
-	if err := s.store.SetVisibleGrants(r.Context(), id, r.Form["visible_tool_id"], r.Form["tool_id"]); err != nil {
-		if async {
-			http.Error(w, "Could not save access", http.StatusInternalServerError)
-			return
-		}
-		s.redirectError(w, r, "/agents/"+id, "Could not save access")
-		return
-	}
-	if async {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	target := r.FormValue("return_url")
-	if !strings.HasPrefix(target, "/agents/"+id) {
-		target = "/agents/" + id
-	}
-	target += map[bool]string{true: "&", false: "?"}[strings.Contains(target, "?")] + "notice=" + url.QueryEscape("Access updated for this page.")
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (s *Server) setAgentConnection(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := r.ParseForm(); err != nil {
-		s.redirectError(w, r, "/agents/"+id, "Invalid form")
-		return
-	}
-	enabled := r.FormValue("enabled") == "true"
-	if err := s.store.SetAgentConnection(r.Context(), id, r.PathValue("connectionID"), enabled); err != nil {
-		s.redirectError(w, r, "/agents/"+id, "Could not update connection access")
-		return
-	}
-	message := "Connection access removed."
-	if enabled {
-		message = "Connection assigned. Existing and newly discovered tools will stay available to this agent."
-	}
-	http.Redirect(w, r, "/agents/"+id+"?notice="+url.QueryEscape(message), http.StatusSeeOther)
-}
-
-func (s *Server) disableAgent(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DisableAgent(r.Context(), r.PathValue("id")); err != nil {
-		s.redirectError(w, r, "/agents", "Could not disable agent")
-		return
-	}
-	http.Redirect(w, r, "/agents?notice="+url.QueryEscape("Agent disabled and all of its tokens revoked."), http.StatusSeeOther)
-}
-
-func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	agent, err := s.store.GetAgent(r.Context(), id)
-	if err != nil {
-		s.redirectError(w, r, "/agents", "Agent not found")
-		return
-	}
-	if agent.Runtime == "hermes" && agent.ConfigPath != "" {
-		if err := s.importer.DisconnectProfile(agent.ConfigPath); err != nil {
-			s.log.Error("disconnect Hermes profile", "error", err)
-			s.redirectError(w, r, "/agents", "The Hermes configuration could not be updated")
-			return
-		}
-	}
-	if err := s.store.DeleteAgent(r.Context(), id); err != nil {
-		s.redirectError(w, r, "/agents", "Could not delete agent")
-		return
-	}
-	http.Redirect(w, r, "/agents?notice="+url.QueryEscape("Agent deleted and its Toolmux access removed."), http.StatusSeeOther)
-}
-
-func (s *Server) render(w http.ResponseWriter, data pageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "pages.html", data); err != nil {
-		s.log.Error("render page", "error", err)
-	}
+	w.WriteHeader(status)
+	_, _ = buffer.WriteTo(w)
 }
+
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request, what string) {
+	s.render(w, r, http.StatusNotFound, "error", "", "Not found", errorPage{Title: what + " not found", Message: "It may have been deleted. Use the navigation to find what you need."})
+}
+
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	s.log.Error("request failed", "error", err)
 	http.Error(w, "Toolmux is temporarily unavailable.", http.StatusInternalServerError)
 }
-func (s *Server) redirectError(w http.ResponseWriter, r *http.Request, path, message string) {
-	http.Redirect(w, r, path+map[bool]string{true: "&", false: "?"}[strings.Contains(path, "?")]+"error="+url.QueryEscape(message), http.StatusSeeOther)
+
+type errorPage struct {
+	Title, Message string
 }
 
-func validHTTPURL(value string) bool {
-	parsed, err := url.Parse(value)
-	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != ""
-}
-
-func jsonOrDefault(value, fallback string) json.RawMessage {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		value = fallback
+// redirect stores a one-time message and sends the browser to target.
+func (s *Server) redirect(w http.ResponseWriter, r *http.Request, target string, fl flash) {
+	id := s.flashes.put(fl)
+	separator := "?"
+	if strings.Contains(target, "?") {
+		separator = "&"
 	}
-	return json.RawMessage(value)
+	http.Redirect(w, r, target+separator+"f="+url.QueryEscape(id), http.StatusSeeOther)
 }
 
-func validJSONObject(raw json.RawMessage) bool {
-	var value map[string]any
-	return json.Unmarshal(raw, &value) == nil
+// currentPage is the request path and query without the one-time flash id.
+func currentPage(r *http.Request) string {
+	query := r.URL.Query()
+	query.Del("f")
+	if encoded := query.Encode(); encoded != "" {
+		return r.URL.Path + "?" + encoded
+	}
+	return r.URL.Path
 }
 
-func validStringMap(raw json.RawMessage) bool {
-	var value map[string]string
-	return json.Unmarshal(raw, &value) == nil
+// returnTarget accepts a same-site path supplied by a form so an action can
+// send the browser back where it started.
+func returnTarget(value, fallback string) string {
+	if strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") {
+		return value
+	}
+	return fallback
 }
 
-func validURLTemplate(value string) bool {
-	return strings.HasPrefix(value, "/") || strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
-}
-
-func durationMS(value string, fallbackSeconds int) int {
-	seconds, err := strconv.Atoi(value)
-	if err != nil || seconds < 1 || seconds > 3600 {
-		seconds = fallbackSeconds
-	}
-	return seconds * 1000
-}
-
-func pageNumber(r *http.Request) int {
-	page, err := strconv.Atoi(r.URL.Query().Get("page"))
-	if err != nil || page < 1 {
-		return 1
-	}
-	return page
-}
-
-func newPager(r *http.Request, requested, total, pageSize int) pager {
-	pages := (total + pageSize - 1) / pageSize
-	if pages < 1 {
-		pages = 1
-	}
-	page := requested
-	if page > pages {
-		page = pages
-	}
-	from := 0
-	to := 0
-	if total > 0 {
-		from = (page-1)*pageSize + 1
-		to = min(page*pageSize, total)
-	}
-	result := pager{Page: page, Pages: pages, Total: total, From: from, To: to, HasPrevious: page > 1, HasNext: page < pages}
-	pageURL := func(value int) string {
-		query := r.URL.Query()
-		query.Set("page", strconv.Itoa(value))
-		return r.URL.Path + "?" + query.Encode()
-	}
-	if result.HasPrevious {
-		result.PreviousURL = pageURL(page - 1)
-	}
-	if result.HasNext {
-		result.NextURL = pageURL(page + 1)
-	}
-	return result
-}
-
-func pageSlice[T any](items []T, pagination pager, pageSize int) []T {
-	if len(items) == 0 {
-		return items
-	}
-	start := (pagination.Page - 1) * pageSize
-	return items[start:min(start+pageSize, len(items))]
-}
-
-func containsFold(value, query string) bool {
-	return strings.Contains(strings.ToLower(value), strings.ToLower(query))
-}
-
-func (s *Server) sameOrigin(next http.Handler) http.Handler {
+// sameOrigin rejects browser-originated POSTs from other sites. Requests
+// without browser headers (agents, scripts) pass through; the MCP endpoints
+// authenticate with bearer tokens instead.
+func sameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path != "/mcp" {
-			origin := strings.TrimRight(r.Header.Get("Origin"), "/")
-			referer := r.Header.Get("Referer")
-			if origin != "" && origin != s.baseURL {
+		if r.Method == http.MethodPost && r.URL.Path != "/mcp" && r.URL.Path != "/admin/mcp" {
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 				http.Error(w, "invalid origin", http.StatusForbidden)
 				return
 			}
-			if origin == "" && referer != "" && !strings.HasPrefix(referer, s.baseURL+"/") {
+			source := r.Header.Get("Origin")
+			if source == "" {
+				source = r.Header.Get("Referer")
+			}
+			if source != "" && !sameHost(source, r.Host) {
 				http.Error(w, "invalid origin", http.StatusForbidden)
 				return
 			}
@@ -879,12 +275,27 @@ func (s *Server) sameOrigin(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-func (s *Server) securityHeaders(next http.Handler) http.Handler {
+
+func sameHost(rawURL, host string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && strings.EqualFold(parsed.Host, host)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func cacheForever(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("v") != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

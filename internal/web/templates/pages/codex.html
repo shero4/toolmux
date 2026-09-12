@@ -1,0 +1,11 @@
+{{define "content"}}
+<header class="page-header"><div><h1>Codex sign-in</h1><p class="lede">The shared ChatGPT account used by the local model bridge.</p></div><a class="btn" href="/providers">Model providers</a></header>
+<section class="panel narrow" data-codex-status>
+<div class="panel-body"><h2>Account authorization</h2><p><strong data-codex-label>{{.Data.Status}}</strong></p><p data-codex-checked></p>
+{{if .IsAdmin}}<div data-codex-instructions hidden><p>Open <a href="https://auth.openai.com/codex/device" target="_blank" rel="noopener noreferrer">OpenAI device sign-in</a> and enter this code:</p><p><code data-codex-code></code></p><p>Complete sign-in in your browser. This page updates automatically. The code expires after 15 minutes.</p></div>{{end}}
+<p>Toolmux checks the saved session every 30 seconds and refreshes expiring credentials when possible. Tokens stay in the bridge volume; they are never displayed here.</p>
+{{if .IsAdmin}}<form method="post" action="/auth/codex"><button class="btn btn-primary" data-codex-start>Start or reconnect sign-in</button></form>{{end}}
+<p class="muted">Completing sign-in restarts the local model bridge. Running inference through that bridge may be interrupted. This authorizes the shared bridge, not an individual agent.</p>
+<p class="muted">If unavailable, start the optional Docker model bridge. Its container is selected by the server's TOOLMUX_CODEX_CONTAINER setting. See <a href="/docs#models">model setup</a>.</p>
+</div></section>
+{{end}}

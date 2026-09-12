@@ -1,0 +1,33 @@
+{{define "content"}}{{$d := .Data}}
+<header class="page-header">
+  <div>
+    <h1>Activity</h1>
+    <p class="lede">Tool and model calls, outcomes, duration, and reported token usage. Prompts, arguments, and results are never stored.</p>
+  </div>
+</header>
+
+<form class="filters" method="get" action="/activity">
+  <input type="search" name="q" value="{{$d.Query}}" placeholder="Search activity" aria-label="Search activity" title="Search by agent, tool, connection, or reason">
+  <select name="decision" aria-label="Outcome">
+    <option value="">All outcomes</option>
+    <option value="allowed" {{if eq $d.Decision "allowed"}}selected{{end}}>Allowed</option>
+    <option value="denied" {{if eq $d.Decision "denied"}}selected{{end}}>Denied</option>
+    <option value="error" {{if eq $d.Decision "error"}}selected{{end}}>Error</option>
+  </select>
+  <select name="agent" aria-label="Agent">
+    <option value="">All agents</option>
+    {{range $d.Agents}}<option value="{{.ID}}" {{if eq $d.AgentID .ID}}selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  <button class="btn" type="submit">Filter</button>
+  {{if $d.Filtered}}<a class="btn btn-ghost" href="/activity">Clear</a>{{end}}
+</form>
+
+{{if $d.Events}}
+<div class="panel">
+  {{template "activity-table" $d.Events}}
+  {{template "pager" $d.Pager}}
+</div>
+{{else}}
+<div class="panel empty">{{if $d.Filtered}}No activity matches these filters.{{else}}No calls recorded yet.{{end}}</div>
+{{end}}
+{{end}}

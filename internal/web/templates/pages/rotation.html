@@ -1,0 +1,17 @@
+{{define "content"}}{{$d:=.Data}}
+<section data-rotation-content class="panel narrow">
+<header class="panel-header"><h1>Rotate token</h1></header>
+<div class="panel-body"><p>Replace the selected token for <strong>{{$d.Agent.Name}}</strong>. The new token works for both tools and inference.</p>
+{{with $d.Error}}<p class="alert alert-error">{{.}}</p>{{end}}
+<form class="form" method="post" action="/agents/{{$d.Agent.ID}}/tokens/{{$d.TokenID}}/rotate">
+<input type="hidden" name="fingerprint" value="{{$d.Fingerprint}}">
+{{if $d.References}}
+<h2>Local configuration detected</h2><p>Only exact references to this token will change. Other credentials and settings stay intact.</p>
+<ul>{{range $d.References}}<li><code>{{.Path}}</code> — {{.Count}} references</li>{{end}}</ul>
+<label><input type="checkbox" name="update_local" checked> Update these local tool and model configuration references</label>
+<p class="muted">The old token is revoked after the files are updated. Restart running clients afterward. If a file changes while this dialog is open, review it again.</p>
+{{else}}<p>No directly replaceable local references were found. Remote clients, environment variables managed outside these files, and unsupported file locations must be updated manually.</p>{{end}}
+<p>Manual rotation revokes the old token immediately. The new token is shown once.</p>
+<div class="form-actions"><button class="btn btn-primary" type="submit">Rotate token</button><a class="btn" href="/agents/{{$d.Agent.ID}}" data-dialog-cancel>Cancel</a></div>
+</form></div></section>
+{{end}}

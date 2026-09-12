@@ -1,0 +1,55 @@
+# Standalone remote deployment. Do not merge with the development compose.yaml.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: toolmux
+      POSTGRES_USER: toolmux
+      POSTGRES_PASSWORD: ${TOOLMUX_DB_PASSWORD:?set a strong URL-safe database password}
+    volumes:
+      - toolmux-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolmux -d toolmux"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+  toolmux:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      TOOLMUX_DATABASE_URL: postgres://toolmux:${TOOLMUX_DB_PASSWORD:?set database password}@db:5432/toolmux?sslmode=disable
+      TOOLMUX_MASTER_KEY: ${TOOLMUX_MASTER_KEY:?set encryption key}
+      TOOLMUX_BASE_URL: ${TOOLMUX_BASE_URL:?set client-facing URL}
+      TOOLMUX_ADDR: 0.0.0.0:8080
+    ports:
+      - "${TOOLMUX_BIND_IP:-127.0.0.1}:${TOOLMUX_PORT:-8080}:8080"
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+  proxy:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    depends_on: [toolmux]
+    environment:
+      TOOLMUX_DOMAIN: ${TOOLMUX_DOMAIN:-localhost}
+    ports:
+      - "${TOOLMUX_PROXY_BIND_IP:-0.0.0.0}:80:80"
+      - "${TOOLMUX_PROXY_BIND_IP:-0.0.0.0}:443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  toolmux-data:
+  caddy-data:
+  caddy-config:

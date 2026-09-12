@@ -1,6 +1,6 @@
 .env
 .git
+.claude
 /toolmux
 *.exe
-node_modules
 /tmp/

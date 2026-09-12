@@ -1,0 +1,57 @@
+{{define "flash"}}
+<div class="alert alert-{{.Kind}}" role="{{if eq .Kind "error"}}alert{{else}}status{{end}}">
+  <p>{{.Message}}</p>
+  {{if .Details}}<ul>{{range .Details}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{if .Token}}
+  <div class="reveal">
+    <div class="reveal-row">
+      <code id="revealed-token">{{.Token}}</code>
+      <button class="btn btn-sm" type="button" data-copy="#revealed-token">Copy</button>
+    </div>
+    {{with .Setup}}
+    <details class="reveal-setup" open>
+      <summary>{{.Title}}</summary>
+      {{if .Destination}}<p class="muted small">Configuration file: <code>{{.Destination}}</code></p>{{end}}
+      <pre><code id="revealed-setup">{{.Config}}</code></pre>
+      <p class="muted small">{{.Note}}</p>
+    </details>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "pager"}}{{if gt .Pages 1}}
+<nav class="pager" aria-label="Pagination">
+  <span>{{.From}}–{{.To}} of {{.Total}}</span>
+  <span class="pager-links">
+    {{if .HasPrevious}}<a class="btn btn-sm" href="{{.PreviousURL}}">Previous</a>{{end}}
+    <span>Page {{.Page}} of {{.Pages}}</span>
+    {{if .HasNext}}<a class="btn btn-sm" href="{{.NextURL}}">Next</a>{{end}}
+  </span>
+</nav>
+{{end}}{{end}}
+
+{{define "activity-table"}}
+<table class="table table-activity">
+  <thead><tr><th>Time</th><th>Agent</th><th>Tool / model</th><th>Connection / provider</th><th>Outcome</th><th class="num">Duration</th><th class="num">Tokens in / out</th></tr></thead>
+  <tbody>
+  {{range .}}<tr>
+    <td class="nowrap muted">{{time .CreatedAt}}</td>
+    <td>{{if .AgentID}}<a href="/agents/{{.AgentID}}">{{.AgentName}}</a>{{else}}{{.AgentName}}{{end}}</td>
+    <td>{{if .ToolID}}<a class="mono" href="/tools/{{.ToolID}}">{{.ToolName}}</a>{{else if eq .Method "models/call"}}<code>{{.ToolName}}</code><span class="muted small block">Inference</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td>{{if .ConnectionID}}<a href="/connections/{{.ConnectionID}}">{{.ConnectionName}}</a>{{else if .ConnectionName}}{{.ConnectionName}}{{else}}<span class="muted">—</span>{{end}}</td>
+    <td><span class="badge badge-{{decision .Decision}}">{{.Decision}}</span>{{if .Reason}}<span class="muted small block">{{short .Reason}}</span>{{end}}</td>
+    <td class="num muted nowrap">{{if .DurationMS}}{{.DurationMS}} ms{{else}}—{{end}}</td>
+    <td class="num muted nowrap">{{if .InputTokens}}{{.InputTokens}}{{else}}—{{end}} / {{if .OutputTokens}}{{.OutputTokens}}{{else}}—{{end}}</td>
+  </tr>{{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{define "icon-brand"}}<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="1.5" y="1.5" width="17" height="17" rx="4.5" fill="currentColor"/><path d="M6 7h8M10 7v7" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>{{end}}
+{{define "icon-overview"}}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>{{end}}
+{{define "icon-agents"}}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="10" height="8" rx="2"/><path d="M8 2v3M6 9h.01M10 9h.01"/></svg>{{end}}
+{{define "icon-connections"}}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="8" r="2"/><path d="M6 8h4"/></svg>{{end}}
+{{define "icon-tools"}}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/><circle cx="5.5" cy="4" r="1.5" fill="currentColor" stroke="none"/><circle cx="10.5" cy="8" r="1.5" fill="currentColor" stroke="none"/><circle cx="7" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>{{end}}
+{{define "icon-activity"}}<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8h3l2-4.5 3 9 2-4.5h3"/></svg>{{end}}

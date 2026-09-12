@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shero4/toolmux/internal/store"
@@ -61,8 +62,26 @@ type stdioSession struct {
 	stdin  io.WriteCloser
 	decode *json.Decoder
 	encode *json.Encoder
-	stderr bytes.Buffer
+	stderr syncBuffer
 	modern bool
+}
+
+// syncBuffer collects stderr from the child while the caller may read it.
+type syncBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *syncBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(data)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func (c *Client) connectStdio(ctx context.Context, spec store.MCPStdioSpec, credential store.Credential) (*stdioSession, error) {
@@ -112,6 +131,7 @@ func (c *Client) startStdio(ctx context.Context, spec store.MCPStdioSpec, creden
 		return nil, fmt.Errorf("decode MCP command arguments: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, spec.Executable, args...)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = spec.WorkingDirectory
 	cmd.Env = mergeEnvironment(os.Environ(), credential.Environment)
 	stdin, err := cmd.StdinPipe()

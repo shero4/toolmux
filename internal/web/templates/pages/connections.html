@@ -1,0 +1,58 @@
+{{define "content"}}{{$d := .Data}}
+<header class="page-header">
+  <div>
+    <h1>Connections</h1>
+    <p class="lede">Upstream MCP servers, HTTP APIs, and installed commands. Credentials stay encrypted here and never reach agents.</p>
+  </div>
+  <div class="page-actions">
+    {{if $.CanManage}}<a class="btn" href="/agents/discover">Import from Hermes</a>{{end}}
+    {{if $.CanManage}}<a class="btn btn-primary" href="/connections/new">New connection</a>{{end}}
+  </div>
+</header>
+
+<form class="filters" method="get" action="/connections">
+  <input type="search" name="q" value="{{$d.Query}}" placeholder="Search connections" aria-label="Search connections">
+  <select name="kind" aria-label="Type">
+    <option value="">All types</option>
+    <option value="mcp_http" {{if eq $d.Kind "mcp_http"}}selected{{end}}>Remote MCP</option>
+    <option value="mcp_stdio" {{if eq $d.Kind "mcp_stdio"}}selected{{end}}>Local MCP</option>
+    <option value="http_api" {{if eq $d.Kind "http_api"}}selected{{end}}>HTTP API</option>
+    <option value="command" {{if eq $d.Kind "command"}}selected{{end}}>Command</option>
+  </select>
+  <select name="status" aria-label="Status">
+    <option value="">All statuses</option>
+    <option value="connected" {{if eq $d.Status "connected"}}selected{{end}}>Connected</option>
+    <option value="reauthorization_required" {{if eq $d.Status "reauthorization_required"}}selected{{end}}>Needs authorization</option>
+    <option value="unreachable" {{if eq $d.Status "unreachable"}}selected{{end}}>Unreachable</option>
+    <option value="degraded" {{if eq $d.Status "degraded"}}selected{{end}}>Degraded</option>
+    <option value="unchecked" {{if eq $d.Status "unchecked"}}selected{{end}}>Not checked</option>
+    <option value="disabled" {{if eq $d.Status "disabled"}}selected{{end}}>Disabled</option>
+  </select>
+  <button class="btn" type="submit">Filter</button>
+  {{if $d.Filtered}}<a class="btn btn-ghost" href="/connections">Clear</a>{{end}}
+</form>
+
+{{if $d.Connections}}
+<div class="panel">
+  <table class="table">
+    <thead><tr><th>Connection</th><th>Type</th><th>Auth</th><th>Status</th><th class="num">Tools</th><th class="num">Agents</th><th>Checked</th><th class="actions"></th></tr></thead>
+    <tbody>{{range $d.Connections}}<tr>
+      <td><a href="/connections/{{.ID}}">{{.Name}}</a><span class="muted small block truncate">{{.ConnectorName}}{{if .EndpointURL}} · {{.EndpointURL}}{{end}}</span></td>
+      <td class="nowrap">{{kind .Kind}}</td>
+      <td class="nowrap">{{auth .AuthMethod}}</td>
+      <td><span class="badge badge-{{badge .Status}}">{{status .Status}}</span></td>
+      <td class="num">{{.ToolCount}}</td>
+      <td class="num">{{.AgentCount}}</td>
+      <td class="muted nowrap">{{date .LastCheckedAt}}</td>
+      <td class="actions">
+        {{if and (eq .AuthMethod "oauth2") (eq .Status "reauthorization_required")}}{{if $.CanManage}}<form method="post" action="/connections/{{.ID}}/authorize"><button class="btn btn-sm btn-primary" type="submit">Authorize</button></form>{{end}}{{end}}
+        {{if ne .Status "disabled"}}{{if $.CanManage}}<form method="post" action="/connections/{{.ID}}/check"><input type="hidden" name="return_url" value="{{$.ReturnURL}}"><button class="btn btn-sm" type="submit">Check</button></form>{{end}}{{end}}
+      </td>
+    </tr>{{end}}</tbody>
+  </table>
+  {{template "pager" $d.Pager}}
+</div>
+{{else}}
+<div class="panel empty">{{if $d.Filtered}}No connections match these filters.{{else}}No connections yet. {{if $.CanManage}}<a href="/connections/new">Add one</a>{{end}} or {{if $.CanManage}}<a href="/agents/discover">import from Hermes</a>{{end}}.{{end}}</div>
+{{end}}
+{{end}}

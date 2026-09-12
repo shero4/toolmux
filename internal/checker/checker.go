@@ -1,16 +1,22 @@
+// Package checker verifies upstream connections and records their health.
 package checker
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/shero4/toolmux/internal/execute"
 	"github.com/shero4/toolmux/internal/mcp"
 	"github.com/shero4/toolmux/internal/oauth"
 	"github.com/shero4/toolmux/internal/store"
+)
+
+const (
+	checkTimeout = 45 * time.Second
+	parallelism  = 4
 )
 
 type Checker struct {
@@ -24,6 +30,9 @@ func New(store *store.Store, executor *execute.Router, oauth *oauth.Manager, log
 	return &Checker{store: store, executor: executor, oauth: oauth, log: log}
 }
 
+// Check runs one connection check now and stores the outcome. It returns an
+// error only when the connection could not be loaded or the result could not
+// be saved; upstream failures are recorded as the connection's status.
 func (c *Checker) Check(ctx context.Context, id string) error {
 	connection, credential, err := c.store.GetConnection(ctx, id)
 	if err != nil {
@@ -37,22 +46,48 @@ func (c *Checker) Check(ctx context.Context, id string) error {
 		return err
 	}
 	check, err := c.executor.Check(ctx, connection, credential)
-	if err == nil {
-	} else if errors.Is(err, mcp.ErrUnauthorized) {
-		check = store.Check{}
-		check.Status = "reauthorization_required"
-		check.Reachable = true
-		check.Detail = "The upstream rejected the configured credential."
-	} else {
-		check = store.Check{Status: "unreachable", Detail: "The endpoint could not be reached."}
-		check.Detail = cleanError(err)
+	switch {
+	case err == nil:
+	case errors.Is(err, mcp.ErrUnauthorized):
+		check = store.Check{Status: "reauthorization_required", Reachable: true, Detail: "The upstream rejected the configured credential."}
+	default:
+		check = store.Check{Status: "unreachable", Detail: describe(err)}
 	}
-	if err := c.store.SaveCheck(ctx, id, check); err != nil {
-		return err
-	}
-	return nil
+	return c.store.SaveCheck(ctx, id, check)
 }
 
+// CheckMany checks the given connections in the background with bounded
+// parallelism. It returns immediately.
+func (c *Checker) CheckMany(ids []string) {
+	seen := make(map[string]bool, len(ids))
+	unique := ids[:0:0]
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+	go func() {
+		sem := make(chan struct{}, parallelism)
+		var wg sync.WaitGroup
+		for _, id := range unique {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
+				defer cancel()
+				if err := c.Check(ctx, id); err != nil {
+					c.log.Error("background connection check", "connection", id, "error", err)
+				}
+			}(id)
+		}
+		wg.Wait()
+	}()
+}
+
+// Run checks every enabled connection on the interval until ctx ends.
 func (c *Checker) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -76,7 +111,7 @@ func (c *Checker) checkAll(ctx context.Context) {
 		if connection.Status == "disabled" {
 			continue
 		}
-		checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 		err := c.Check(checkCtx, connection.ID)
 		cancel()
 		if err != nil {
@@ -85,10 +120,10 @@ func (c *Checker) checkAll(ctx context.Context) {
 	}
 }
 
-func cleanError(err error) string {
+func describe(err error) string {
 	message := err.Error()
 	if len(message) > 240 {
 		message = message[:240]
 	}
-	return fmt.Sprintf("Connection failed: %s", message)
+	return "Connection failed: " + message
 }
