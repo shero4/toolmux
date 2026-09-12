@@ -49,11 +49,30 @@
   document.querySelectorAll("[data-copy]").forEach(function (button) {
     button.addEventListener("click", function () {
       var target = document.querySelector(button.getAttribute("data-copy"));
-      if (!target || !navigator.clipboard) return;
-      navigator.clipboard.writeText(target.textContent).then(function () {
+      if (!target) return;
+      var value = target.textContent.trim();
+      var fallbackCopy = function () {
+        var input = document.createElement("textarea");
+        input.value = value;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        var copied = document.execCommand("copy");
+        input.remove();
+        return copied ? Promise.resolve() : Promise.reject(new Error("Copy failed"));
+      };
+      var copy = navigator.clipboard && window.isSecureContext
+        ? navigator.clipboard.writeText(value).catch(fallbackCopy)
+        : fallbackCopy();
+      copy.then(function () {
         var label = button.textContent;
         button.textContent = "Copied";
         window.setTimeout(function () { button.textContent = label; }, 1500);
+      }).catch(function () {
+        button.textContent = "Select and copy";
+        window.setTimeout(function () { button.textContent = "Copy code"; }, 1800);
       });
     });
   });
