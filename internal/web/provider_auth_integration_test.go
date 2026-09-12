@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -66,4 +67,36 @@ func TestProviderAuthPersistenceAndRedaction(t *testing.T) {
 	if key != "" {
 		t.Fatal("clear credentials failed")
 	}
+
+	if err = db.SaveDiscoveredModels(ctx, id, []string{"automatic-one", "*"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	models, err := db.AvailableModels(ctx)
+	if err != nil || !containsModel(models, "native/model") || !containsModel(models, "native/automatic-one") || containsModel(models, "native/*") {
+		t.Fatal("concrete model catalog was not published correctly", models, err)
+	}
+	if err = db.SaveDiscoveredModels(ctx, id, []string{"automatic-two"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = db.ResolveModel(ctx, "native/automatic-one"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("stale discovered model remained routable", err)
+	}
+	if _, _, _, err = db.ResolveModel(ctx, "native/model"); err != nil {
+		t.Fatal("manual model was disabled during reconciliation", err)
+	}
+	if err = db.SaveDiscoveredModels(ctx, id, nil, "temporary discovery failure"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = db.ResolveModel(ctx, "native/automatic-two"); err != nil {
+		t.Fatal("failed discovery changed the last known-good catalog", err)
+	}
+}
+
+func containsModel(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }

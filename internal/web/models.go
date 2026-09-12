@@ -15,7 +15,7 @@ import (
 type providersPage struct{ Providers []store.ModelProvider }
 type providerPage struct {
 	Provider store.ModelProvider
-	Models   []string
+	Models   []store.ProviderModel
 	Error    string
 	New      bool
 }
@@ -65,7 +65,17 @@ func (s *Server) saveProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	timeout, _ := strconv.Atoi(r.FormValue("timeout"))
 	p := store.ModelProvider{ID: r.PathValue("id"), Name: strings.TrimSpace(r.FormValue("name")), Slug: strings.TrimSpace(r.FormValue("slug")), BaseURL: strings.TrimRight(strings.TrimSpace(r.FormValue("base_url")), "/"), Adapter: r.FormValue("adapter"), Enabled: r.FormValue("enabled") == "on", TimeoutSeconds: timeout}
-	p.Options = store.ProviderOptions{AuthType: r.FormValue("auth_type"), AuthHeader: strings.TrimSpace(r.FormValue("auth_header")), Username: strings.TrimSpace(r.FormValue("auth_username")), TokenURL: strings.TrimSpace(r.FormValue("token_url")), ClientID: strings.TrimSpace(r.FormValue("client_id")), Scope: strings.TrimSpace(r.FormValue("scope")), Audience: strings.TrimSpace(r.FormValue("audience")), TokenAuth: r.FormValue("token_auth"), APIVersion: strings.TrimSpace(r.FormValue("api_version"))}
+	p.Options = store.ProviderOptions{AuthType: r.FormValue("auth_type"), AuthHeader: strings.TrimSpace(r.FormValue("auth_header")), Username: strings.TrimSpace(r.FormValue("auth_username")), TokenURL: strings.TrimSpace(r.FormValue("token_url")), ClientID: strings.TrimSpace(r.FormValue("client_id")), Scope: strings.TrimSpace(r.FormValue("scope")), Audience: strings.TrimSpace(r.FormValue("audience")), TokenAuth: r.FormValue("token_auth"), APIVersion: strings.TrimSpace(r.FormValue("api_version")), CatalogMode: r.FormValue("catalog_mode")}
+	if p.Options.CatalogMode == "" {
+		p.Options.CatalogMode = "auto"
+	}
+	if p.Options.CatalogMode != "auto" && p.Options.CatalogMode != "manual" && p.Options.CatalogMode != "codex" {
+		reject := func(message string) {
+			s.render(w, r, 400, "provider", "providers", "Model provider", providerPage{Provider: p, Error: message, New: p.ID == ""})
+		}
+		reject("Choose automatic, Codex subscription, or manual model discovery.")
+		return
+	}
 	models := strings.Fields(r.FormValue("models"))
 	reject := func(message string) {
 		s.render(w, r, 400, "provider", "providers", "Model provider", providerPage{Provider: p, Error: message, New: p.ID == ""})
@@ -135,7 +145,15 @@ func (s *Server) discoverModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Headers = credential.Headers
-	models, discoverErr := gateway.Discover(r.Context(), s.modelClient, p, credential.BearerToken)
+	var models []string
+	var discoverErr error
+	if p.Options.CatalogMode == "manual" || (p.Options.CatalogMode == "" && p.Adapter == "azure") {
+		discoverErr = errors.New("this provider uses manually managed model IDs")
+	} else if p.Options.CatalogMode == "codex" {
+		models, discoverErr = s.operations.Codex.Models(r.Context())
+	} else {
+		models, discoverErr = gateway.Discover(r.Context(), s.modelClient, p, credential.BearerToken)
+	}
 	detail := ""
 	if discoverErr != nil {
 		detail = discoverErr.Error()
@@ -144,7 +162,7 @@ func (s *Server) discoverModels(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	fl := flash{Kind: "ok", Message: "Model catalog refreshed. Existing model IDs were preserved."}
+	fl := flash{Kind: "ok", Message: "Model catalog refreshed. Models no longer returned by the provider were marked unavailable."}
 	if discoverErr != nil {
 		fl = flash{Kind: "error", Message: detail}
 	}

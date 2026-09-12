@@ -2,11 +2,13 @@
 # Models are illustrative; select IDs available to your own provider account.
 # Toolmux discovers model_name; LiteLLM resolves litellm_params.model.
 model_list:
-  - model_name: codex
+  # The wildcard is a routing rule only. Toolmux obtains the concrete catalog
+  # from the signed-in Codex account and never publishes this wildcard.
+  - model_name: "*"
     model_info:
       mode: responses
     litellm_params:
-      model: chatgpt/gpt-5.3-codex
+      model: chatgpt/*
   # - model_name: claude
   #   litellm_params:
   #     model: anthropic/YOUR_MODEL_ID

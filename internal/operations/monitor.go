@@ -141,14 +141,23 @@ func (m *Monitor) Check(ctx context.Context) {
 				return
 			}
 			p.Headers = credential.Headers
-			if p.Adapter != "azure" {
-				_, e = gateway.Discover(c, gateway.Client(), p, credential.BearerToken)
+			if p.Options.CatalogMode != "manual" && p.Adapter != "azure" {
+				var models []string
+				if p.Options.CatalogMode == "codex" {
+					models, e = m.Codex.Models(c)
+				} else {
+					models, e = gateway.Discover(c, gateway.Client(), p, credential.BearerToken)
+				}
 				if e == nil {
 					status = "connected"
+					_ = m.Store.SaveDiscoveredModels(c, p.ID, models, "")
 				} else if errors.Is(e, gateway.ErrProviderAuthorization) {
 					status = "reauthorization_required"
 				} else if strings.Contains(e.Error(), "could not reach") {
 					status = "unreachable"
+				}
+				if e != nil {
+					_ = m.Store.SaveDiscoveredModels(c, p.ID, nil, e.Error())
 				}
 			}
 			_ = m.Store.Observe(c, "provider", p.ID, p.Name, status)

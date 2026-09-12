@@ -8,7 +8,8 @@ including auxiliary models and fallbacks; Toolmux never chooses these for it.
 1. Sign in and open **Models → Add provider**.
 2. Set a display name and stable prefix, for example `work-provider`.
 3. Select the protocol, enter its base URL, and configure authentication.
-4. Save, then choose **Discover models**, or add exact upstream model IDs.
+4. Choose provider discovery, signed-in Codex account discovery, or manual
+   model IDs. Save, then choose **Discover models**.
 5. In an agent, configure a custom OpenAI-compatible provider with base URL
    `http://localhost:8080/v1` and its existing Toolmux agent token as the API key.
 6. Select a returned model ID such as `work-provider/model-id`.
@@ -18,9 +19,11 @@ providers. MCP tool grants are independent. Revoke the token or disable the
 agent to stop both tool and model access. Pausing a provider prevents new calls
 through that provider; already-running requests finish normally.
 
-The model catalog persists in PostgreSQL. Discovery adds models without
-deleting manually configured IDs or silently removing existing ones. Changing
-a provider's display name leaves its model prefix intact.
+The model catalog persists in PostgreSQL. Successful discovery adds new IDs and
+marks disappeared discovered IDs unavailable. Manual IDs are preserved, and a
+failed discovery leaves the last known-good catalog routable. Wildcard routing
+entries are never published as models. Changing a provider's display name
+leaves its model prefix intact.
 
 ## Protocols and authentication
 
@@ -75,7 +78,8 @@ an established library. Gemini, Bedrock, Vertex, and other SDK-based providers
 are configured in LiteLLM using their documented credentials or workload identity.
 
 1. Copy `deploy/litellm.example.yaml` to an ignored local file under `tmp/`.
-   Set `LITELLM_CONFIG` to that file. Add model mappings available to your account.
+   Set `LITELLM_CONFIG` to that file. Its `chatgpt/*` wildcard is a routing
+   rule; Toolmux never exposes the wildcard to clients.
 2. Set a separate random `LITELLM_MASTER_KEY` in your environment. Use provider
    environment variables or a secrets manager; do not commit real credentials.
 3. Run `docker compose -f compose.models.yaml up -d`. The default image follows
@@ -84,15 +88,18 @@ are configured in LiteLLM using their documented credentials or workload identit
 4. Add a Toolmux provider with protocol LiteLLM, URL `http://127.0.0.1:4000/v1`
    for native Toolmux, and the bridge's master key. If both services run through
    the combined Compose files, use `http://models:4000/v1` from the Toolmux container.
-5. Discover models. Toolmux exposes the configured LiteLLM `model_name` under
-   its own provider prefix. A bridge alias `assistant`, for example, becomes
-   `bridge/assistant`. Select its upstream model in the bridge configuration.
+5. For ordinary LiteLLM aliases, choose provider discovery. For Codex
+   subscription access, choose signed-in Codex account discovery. Toolmux then
+   exposes concrete IDs such as `codex-bridge/gpt-5.6-terra`, while LiteLLM
+   routes the selected suffix to `chatgpt/gpt-5.6-terra`.
 
 ChatGPT/Codex subscription access uses LiteLLM's `chatgpt/` provider. The first
 local request prints a verification URL and device code in the bridge logs;
 complete the sign-in yourself. Follow `docker compose -f compose.models.yaml logs -f models`
 while making that request. LiteLLM owns token refresh and keeps its auth in the
-`model-auth` Docker volume. Toolmux does not copy desktop client credentials.
+`model-auth` Docker volume. Toolmux reads the available catalog through the
+authenticated bridge process; access and refresh tokens never leave that
+volume. Toolmux does not copy desktop client credentials.
 Responses is the native API; Chat Completions is translated for supported models.
 On a native host with Docker access, Toolmux's **Codex sign-in** page starts
 device authorization and displays its status. Set `TOOLMUX_CODEX_CONTAINER` to

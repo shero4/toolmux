@@ -14,8 +14,9 @@ or a server; your clients can run wherever you need them.
 
 - **Share tools:** connect MCP servers, HTTP APIs, and installed commands; choose
   which tools each agent can access.
-- **Centralize inference:** configure model providers and credentials once,
-  then select models in your clients.
+- **Centralize inference:** configure provider endpoints and credentials once,
+  maintain their model catalogs centrally, then select concrete models in each
+  client.
 - **Manage access:** issue and rotate agent tokens, and give people
   administrator, operator, or viewer access to the web interface.
 - **See activity:** view call outcomes and authorization status, and receive

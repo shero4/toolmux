@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
@@ -20,6 +21,68 @@ type CodexState struct {
 	CheckedAt time.Time `json:"checked_at"`
 	Running   bool      `json:"running"`
 }
+
+const modelsScript = `import base64,json,time,urllib.request
+from litellm.llms.chatgpt.authenticator import Authenticator
+a=Authenticator(); d=a._read_auth_file() or {}
+token=d.get('access_token','')
+if token and (a._is_token_expired(d,token) or (d.get('expires_at') or 0)-time.time()<300) and d.get('refresh_token'):
+ a._refresh_tokens(d['refresh_token']); d=a._read_auth_file() or {}; token=d.get('access_token','')
+if not token or a._is_token_expired(d,token):
+ print(json.dumps({'error':'Codex authorization is required'})); raise SystemExit(2)
+headers={'Authorization':'Bearer '+token,'User-Agent':'toolmux/1.0'}
+try:
+ parts=token.split('.')
+ payload=json.loads(base64.urlsafe_b64decode(parts[1]+'='*(-len(parts[1])%4)))
+ account=(payload.get('https://api.openai.com/auth') or {}).get('chatgpt_account_id')
+ if account: headers['ChatGPT-Account-Id']=account
+except Exception: pass
+req=urllib.request.Request('https://chatgpt.com/backend-api/codex/models?client_version=1.0.0',headers=headers)
+try:
+ with urllib.request.urlopen(req,timeout=15) as response: data=json.load(response)
+except Exception as exc:
+ print(json.dumps({'error':'Codex model discovery failed: '+str(exc)})); raise SystemExit(3)
+models=[]
+for item in data.get('models',[]):
+ if not isinstance(item,dict): continue
+ slug=item.get('slug','').strip() if isinstance(item.get('slug'),str) else ''
+ visibility=item.get('visibility','').strip().lower() if isinstance(item.get('visibility'),str) else ''
+ if slug and visibility not in ('hide','hidden') and '*' not in slug and len(slug)<=256: models.append(slug)
+print(json.dumps({'models':list(dict.fromkeys(models))}))
+`
+
+// Models returns the concrete model IDs visible to the authenticated Codex
+// subscription. The access and refresh tokens never leave the bridge volume.
+func (c *Codex) Models(ctx context.Context) ([]string, error) {
+	if !c.work.TryLock() {
+		return nil, errors.New("Codex authorization is busy; try again shortly")
+	}
+	defer c.work.Unlock()
+	check, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	data, err := c.command(check, modelsScript).CombinedOutput()
+	var result struct {
+		Models []string `json:"models"`
+		Error  string   `json:"error"`
+	}
+	if json.Unmarshal(data, &result) != nil {
+		if err != nil {
+			return nil, fmt.Errorf("Codex model discovery failed")
+		}
+		return nil, errors.New("Codex returned an invalid model catalog")
+	}
+	if result.Error != "" {
+		return nil, errors.New(result.Error)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Codex model discovery failed")
+	}
+	if len(result.Models) == 0 {
+		return nil, errors.New("the signed-in Codex account returned no models")
+	}
+	return result.Models, nil
+}
+
 type Codex struct {
 	mu        sync.Mutex
 	work      sync.Mutex

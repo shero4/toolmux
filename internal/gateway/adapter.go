@@ -177,7 +177,7 @@ func Discover(ctx context.Context, client *http.Client, p store.ModelProvider, k
 	models := []string{}
 	seen := map[string]bool{}
 	for _, m := range catalog.Data {
-		if m.ID != "" && len(m.ID) <= 256 && !seen[m.ID] {
+		if m.ID != "" && len(m.ID) <= 256 && !strings.Contains(m.ID, "*") && !seen[m.ID] {
 			models = append(models, m.ID)
 			seen[m.ID] = true
 		}

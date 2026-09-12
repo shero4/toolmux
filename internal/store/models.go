@@ -24,18 +24,26 @@ type ModelProvider struct {
 // ProviderOptions contains no credential values. Protocol and authentication
 // are independent: an Anthropic-compatible relay can use bearer or custom auth.
 type ProviderOptions struct {
-	AuthType   string `json:"auth_type,omitempty"`
-	AuthHeader string `json:"auth_header,omitempty"`
-	Username   string `json:"username,omitempty"`
-	TokenURL   string `json:"token_url,omitempty"`
-	ClientID   string `json:"client_id,omitempty"`
-	Scope      string `json:"scope,omitempty"`
-	Audience   string `json:"audience,omitempty"`
-	TokenAuth  string `json:"token_auth,omitempty"`
-	APIVersion string `json:"api_version,omitempty"`
+	AuthType    string `json:"auth_type,omitempty"`
+	AuthHeader  string `json:"auth_header,omitempty"`
+	Username    string `json:"username,omitempty"`
+	TokenURL    string `json:"token_url,omitempty"`
+	ClientID    string `json:"client_id,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	Audience    string `json:"audience,omitempty"`
+	TokenAuth   string `json:"token_auth,omitempty"`
+	APIVersion  string `json:"api_version,omitempty"`
+	CatalogMode string `json:"catalog_mode,omitempty"`
 }
 
-const providerColumns = `SELECT p.id,p.name,p.slug,p.base_url,p.adapter,p.enabled,p.timeout_seconds,p.last_checked_at,p.last_error,(SELECT count(*) FROM provider_models m WHERE m.provider_id=p.id),p.options FROM model_providers p`
+type ProviderModel struct {
+	Model      string
+	Source     string
+	Enabled    bool
+	LastSeenAt *time.Time
+}
+
+const providerColumns = `SELECT p.id,p.name,p.slug,p.base_url,p.adapter,p.enabled,p.timeout_seconds,p.last_checked_at,p.last_error,(SELECT count(*) FROM provider_models m WHERE m.provider_id=p.id AND m.enabled AND position('*' in m.model)=0),p.options FROM model_providers p`
 
 func scanProvider(row pgx.Row) (ModelProvider, error) {
 	var p ModelProvider
@@ -134,23 +142,27 @@ func (s *Store) SaveModelProviderConfig(ctx context.Context, p ModelProvider, ke
 		if model == "" {
 			continue
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO provider_models(provider_id,model) VALUES($1,$2) ON CONFLICT DO NOTHING`, p.ID, model); err != nil {
+		if strings.Contains(model, "*") {
+			return "", errors.New("wildcard model IDs cannot be published")
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO provider_models(provider_id,model,source,enabled) VALUES($1,$2,'manual',true)
+			ON CONFLICT(provider_id,model) DO UPDATE SET source='manual',enabled=true`, p.ID, model); err != nil {
 			return "", err
 		}
 	}
 	return p.ID, tx.Commit(ctx)
 }
 
-func (s *Store) ProviderModels(ctx context.Context, id string) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT model FROM provider_models WHERE provider_id::text=$1 ORDER BY model`, id)
+func (s *Store) ProviderModels(ctx context.Context, id string) ([]ProviderModel, error) {
+	rows, err := s.pool.Query(ctx, `SELECT model,source,enabled,last_seen_at FROM provider_models WHERE provider_id::text=$1 ORDER BY model`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := []string{}
+	result := []ProviderModel{}
 	for rows.Next() {
-		var m string
-		if err := rows.Scan(&m); err != nil {
+		var m ProviderModel
+		if err := rows.Scan(&m.Model, &m.Source, &m.Enabled, &m.LastSeenAt); err != nil {
 			return nil, err
 		}
 		result = append(result, m)
@@ -164,12 +176,31 @@ func (s *Store) SaveDiscoveredModels(ctx context.Context, id string, models []st
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// A failed discovery never changes the last known-good catalog.
+	if detail != "" {
+		_, err = tx.Exec(ctx, `UPDATE model_providers SET last_checked_at=now(),last_error=$2 WHERE id=$1`, id, detail)
+		if err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	seen := make([]string, 0, len(models))
 	for _, model := range models {
-		if _, err = tx.Exec(ctx, `INSERT INTO provider_models(provider_id,model) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, model); err != nil {
+		model = strings.TrimSpace(model)
+		if model == "" || strings.Contains(model, "*") || len(model) > 256 {
+			continue
+		}
+		seen = append(seen, model)
+		if _, err = tx.Exec(ctx, `INSERT INTO provider_models(provider_id,model,source,enabled,last_seen_at) VALUES($1,$2,'discovered',true,now())
+			ON CONFLICT(provider_id,model) DO UPDATE SET enabled=true,last_seen_at=now()`, id, model); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE model_providers SET last_checked_at=now(),last_error=$2 WHERE id=$1`, id, detail); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE provider_models SET enabled=false
+		WHERE provider_id=$1 AND source='discovered' AND NOT(model=ANY($2::text[]))`, id, seen); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE model_providers SET last_checked_at=now(),last_error='' WHERE id=$1`, id); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -178,7 +209,7 @@ func (s *Store) SaveDiscoveredModels(ctx context.Context, id string, models []st
 // AvailableModels is shared by every authenticated agent. Clients choose the
 // provider/model ID; Toolmux does not choose a model or rewrite agent settings.
 func (s *Store) AvailableModels(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT p.slug||'/'||m.model FROM provider_models m JOIN model_providers p ON p.id=m.provider_id WHERE p.enabled ORDER BY p.slug,m.model`)
+	rows, err := s.pool.Query(ctx, `SELECT p.slug||'/'||m.model FROM provider_models m JOIN model_providers p ON p.id=m.provider_id WHERE p.enabled AND m.enabled AND position('*' in m.model)=0 ORDER BY p.slug,m.model`)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +231,7 @@ func (s *Store) ResolveModel(ctx context.Context, selected string) (ModelProvide
 		return ModelProvider{}, "", "", ErrNotFound
 	}
 	var id string
-	err := s.pool.QueryRow(ctx, `SELECT p.id FROM model_providers p JOIN provider_models m ON m.provider_id=p.id WHERE p.slug=$1 AND m.model=$2 AND p.enabled`, slug, model).Scan(&id)
+	err := s.pool.QueryRow(ctx, `SELECT p.id FROM model_providers p JOIN provider_models m ON m.provider_id=p.id WHERE p.slug=$1 AND m.model=$2 AND p.enabled AND m.enabled AND position('*' in m.model)=0`, slug, model).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ModelProvider{}, "", "", ErrNotFound
 	}
