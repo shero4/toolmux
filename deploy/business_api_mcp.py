@@ -4,9 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
 import os
+from pathlib import Path
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -107,6 +112,23 @@ def zammad_call(arguments: dict[str, Any]) -> tuple[int, Any]:
     )
 
 
+@contextlib.contextmanager
+def exclusive_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - production runs on Linux
+            fcntl = None
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def bigin_access_token() -> tuple[str, str]:
     base_url, accounts_url, client_id, client_secret, refresh_token = require_env(
         "BIGIN_BASE_URL",
@@ -115,21 +137,42 @@ def bigin_access_token() -> tuple[str, str]:
         "BIGIN_CLIENT_SECRET",
         "BIGIN_REFRESH_TOKEN",
     )
-    body = urllib.parse.urlencode(
-        {
-            "grant_type": "refresh_token",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": refresh_token,
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(accounts_url.rstrip("/") + "/oauth/v2/token", data=body, method="POST")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        result = json.loads(response.read(65537).decode("utf-8"))
-    token = str(result.get("access_token", ""))
-    if not token:
-        raise ValueError("Bigin authorization could not be refreshed")
-    return base_url, token
+    cache_key = hashlib.sha256(f"{accounts_url}\0{client_id}\0{refresh_token}".encode()).hexdigest()[:24]
+    cache_root = Path(os.environ.get("TOOLMUX_TOKEN_CACHE_DIR", tempfile.gettempdir()))
+    cache_path = cache_root / f"toolmux-bigin-token-{cache_key}.json"
+    lock_path = cache_path.with_suffix(".lock")
+    with exclusive_lock(lock_path):
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            cached = {}
+        if cached.get("access_token") and float(cached.get("expires_at", 0)) > time.time() + 60:
+            return base_url, str(cached["access_token"])
+
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(accounts_url.rstrip("/") + "/oauth/v2/token", data=body, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                result = json.loads(response.read(65537).decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read(2048).decode("utf-8", errors="replace")
+            raise ValueError(f"Bigin authorization refresh failed ({error.code}): {detail}") from error
+        token = str(result.get("access_token", ""))
+        if not token:
+            raise ValueError("Bigin authorization could not be refreshed")
+        cache_root.mkdir(parents=True, exist_ok=True)
+        staged = cache_path.with_suffix(f".{os.getpid()}.tmp")
+        staged.write_text(json.dumps({"access_token": token, "expires_at": time.time() + int(result.get("expires_in", 3600))}), encoding="utf-8")
+        staged.chmod(0o600)
+        staged.replace(cache_path)
+        return base_url, token
 
 
 def bigin_call(arguments: dict[str, Any]) -> tuple[int, Any]:

@@ -35,6 +35,14 @@ Set `HERMES_HOME`, `HERMES_CONFIG`, `CHROME_USER_DATA_DIR`, and the matching
 environment file in the unit. Give each unit memory and task limits, and avoid
 running many browser-heavy jobs at once on smaller hosts.
 
+Give every profile its own persistent Chromium directory. On a small shared
+host, use a locked selector that stops the current browser before opening the
+requested profile, then point Computer Use at the shared private display. This
+keeps browser-heavy jobs serialized while preserving separate cookies and
+storage. A Windows Chrome directory cannot be copied to Linux as a working
+signed-in profile because its secrets are protected by Windows; open each
+remote profile through the private viewer and sign in once after migration.
+
 Keep the desktop, VNC server, and browser viewer on the private network. Bind
 the public Toolmux gateway to HTTPS separately. A profile on the same host uses
 `http://127.0.0.1:8080`; remote clients use the public gateway URL.
@@ -82,7 +90,10 @@ and MCP vendor credentials from the migrated copy.
    model caches, and old Toolmux backups.
 4. Recreate Windows junctions as Linux symlinks to one shared skills tree.
 5. Rewrite drive-letter paths and check every symlink before starting Hermes.
-6. Compare database integrity and important row counts on both hosts.
+6. Rewrite every enabled cron job's provider and model to the concrete Toolmux
+   provider and model IDs. Port active helper scripts away from local vendor
+   CLIs when Toolmux owns that connection.
+7. Compare database integrity and important row counts on both hosts.
 
 Use a SQLite runtime containing the WAL reset fix and FTS5. Confirm both before
 starting services:
@@ -105,6 +116,8 @@ Before stopping a local profile, verify with its Toolmux token:
 - `tools/list` contains only its granted connections.
 - Required OAuth connections are connected and refreshable.
 - The remote profile can read its existing memory and session databases.
+- Computer Use can capture and control the selected isolated browser profile.
+- Every enabled cron helper runs on Linux and contains no source-machine path.
 
 Cut over one profile at a time:
 
