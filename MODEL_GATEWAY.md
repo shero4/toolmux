@@ -7,7 +7,7 @@ including auxiliary models and fallbacks; Toolmux never chooses these for it.
 
 1. Sign in and open **Models → Add provider**.
 2. Set a display name and stable prefix, for example `work-provider`.
-3. Enter the API base URL including its version path, and the provider API key.
+3. Select the protocol, enter its base URL, and configure authentication.
 4. Save, then choose **Discover models**, or add exact upstream model IDs.
 5. In an agent, configure a custom OpenAI-compatible provider with base URL
    `http://localhost:8080/v1` and its existing Toolmux agent token as the API key.
@@ -24,8 +24,8 @@ a provider's display name leaves its model prefix intact.
 
 ## Protocols and authentication
 
-Protocol and authentication are independent, following the separation used by
-Hermes provider profiles. Native JSON parameters, tool definitions, thinking,
+Protocol and authentication are configured independently.
+Native JSON parameters, tool definitions, thinking,
 images, and streaming events are forwarded without a lossy translation layer.
 
 | Protocol | Client endpoints | Base URL |
@@ -85,27 +85,27 @@ are configured in LiteLLM using their documented credentials or workload identit
    for native Toolmux, and the bridge's master key. If both services run through
    the combined Compose files, use `http://models:4000/v1` from the Toolmux container.
 5. Discover models. Toolmux exposes the configured LiteLLM `model_name` under
-   its own provider prefix. For example `bridge/codex` maps to the sample's
-   `chatgpt/gpt-5.3-codex`; replace that illustrative model as needed.
+   its own provider prefix. A bridge alias `assistant`, for example, becomes
+   `bridge/assistant`. Select its upstream model in the bridge configuration.
 
 ChatGPT/Codex subscription access uses LiteLLM's `chatgpt/` provider. The first
 local request prints a verification URL and device code in the bridge logs;
 complete the sign-in yourself. Follow `docker compose -f compose.models.yaml logs -f models`
 while making that request. LiteLLM owns token refresh and keeps its auth in the
-`model-auth` Docker volume. Toolmux does not read desktop/Hermes credential files.
+`model-auth` Docker volume. Toolmux does not copy desktop client credentials.
 Responses is the native API; Chat Completions is translated for supported models.
-Device sign-in is in LiteLLM, not a native Toolmux sign-in button. For a separate
-interactive login without making an inference request, run
+On a native host with Docker access, Toolmux's **Codex sign-in** page starts
+device authorization and displays its status. Set `TOOLMUX_CODEX_CONTAINER` to
+the actual bridge container name. The stock application container does not
+include the Docker CLI needed by this control. For CLI sign-in, run
 `python tools/model_login.py --env-file PATH_TO_PRIVATE_BRIDGE_ENV` after starting
 the bridge. It prints the device instructions without printing saved tokens.
-See `tests/e2e/REPORT-2026-09-12.md` for live validation and compatibility limits.
-The tested Codex path uses streamed Responses and an explicit named Responses
-provider in Hermes; the tested bridge's Chat Completions conversion was unreliable
-for that account's model.
+Use a Responses-capable client and verify a streamed request with a model
+available to the account. Device authorization alone does not establish
+inference compatibility. Model selection remains in the client.
 
-Claude Pro/Max subscription credentials are not offered as a gateway auth method:
-Anthropic's current guidance disallows third-party apps intermediating those
-credentials. Use Claude API keys or supported cloud-provider authentication.
+Toolmux does not offer Claude Code subscription sign-in. Configure Claude
+providers with API keys or supported cloud-provider authentication.
 
 This is an extensible set of protocols and authentication mechanisms, not a claim
 that every endpoint or identity scheme is interchangeable. AWS request signing,
@@ -113,9 +113,8 @@ Google workload identity, and provider-specific OAuth belong in the bridge.
 Arbitrary protocol translation, generic interactive OAuth, mTLS, and API-key query
 parameters are not implemented in Toolmux's native adapters.
 
-References checked September 12, 2026:
+Provider references:
 
-- [Hermes provider profiles](https://github.com/NousResearch/hermes-agent/blob/main/providers/base.py)
 - [LiteLLM provider catalog](https://docs.litellm.ai/docs/providers)
 - [LiteLLM Anthropic-compatible API](https://docs.litellm.ai/docs/anthropic_unified)
 - [LiteLLM ChatGPT subscription authentication](https://docs.litellm.ai/docs/providers/chatgpt)
@@ -152,5 +151,5 @@ These tests cover first-run setup, session persistence, protected pages,
 provider creation/discovery, inference and activity, paused providers,
 revoked agent access, password changes, and login attempt limits.
 
-The opt-in local Hermes test is documented in `tests/e2e/README.md`. It exercises
-all four tool connection types and live inference through the running gateway.
+See [development](docs/development.md) for the test workflow and optional
+live-client harness.

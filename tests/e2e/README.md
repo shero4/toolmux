@@ -1,4 +1,8 @@
-# Local Hermes end-to-end test
+# Live client integration test
+
+This harness uses Hermes as one concrete test client. It is optional: Toolmux
+clients are not required to use that runtime. For general development and test
+setup, see [Development](../../docs/development.md).
 
 This opt-in test uses a separate `toolmux-e2e` Hermes profile, a running local
 Toolmux instance, its PostgreSQL database, Python, Go, and an explicitly supplied

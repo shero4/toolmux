@@ -1,16 +1,21 @@
-# EC2 deployment
+# Container deployment
 
-This is a single-host deployment with PostgreSQL and an optional Caddy HTTPS
-proxy. It is prepared for deployment; no EC2 instance has been changed.
+Run Toolmux and PostgreSQL on a Linux server with an optional Caddy HTTPS
+proxy. Use EC2 or another Docker host; adapt the firewall and storage settings
+to your provider.
 Run commands from the Toolmux checkout on the Linux server. Use Docker Engine
 with the Compose plugin, Git and OpenSSL. Use an encrypted persistent EBS disk
 for Docker data and retain backups independently of the instance.
 
 ## 1. Prepare an isolated installation
 
-Clone the private repository at the reviewed revision. The current local work
-must be deliberately committed/pushed or transferred before deployment: a clone
-of the existing remote main branch does not include uncommitted changes.
+Clone the repository and record the revision you deploy:
+
+```sh
+git clone https://github.com/shero4/toolmux.git
+cd toolmux
+git rev-parse HEAD
+```
 
 Build before generating secrets, so Compose does not require a key that has not
 yet been created:
@@ -51,6 +56,10 @@ port and use that localhost port in TOOLMUX_BASE_URL during bootstrap. Set up
 other users under Administration → Users and roles.
 
 ## 2. Select how clients reach the service
+
+This file's HTTPS profile exposes the full application, including sign-in.
+For public agent endpoints with private administration, use the
+[native public gateway layout](GATEWAY.md) instead.
 
 **Public HTTPS:** assign a stable address, point a DNS name to it, then add
 `TOOLMUX_DOMAIN=toolmux.example.com` and change
@@ -134,7 +143,7 @@ profiles or host-specific paths to EC2.
 
 The stock application image contains only the Go binary. Remote MCP/HTTP tools
 and native model-provider requests work without host CLI dependencies.
-Windows-local Hermes profiles and CLIs do not become accessible on EC2.
+Client files and CLIs on another computer do not become accessible on the server.
 Automatic token replacement only works for supported files on the server that
 Toolmux can read and write; remote client configurations need manual updates.
 
@@ -154,20 +163,3 @@ persistent `model-auth` volume. Containerized Toolmux reaches it at
 configure provider keys separately, and authorize the remote bridge explicitly.
 Do not assume this computer's signed-in subscription has moved to EC2.
 See [model setup](../MODEL_GATEWAY.md) for CLI sign-in and adapter details.
-
-The final remote rollout must therefore decide: fresh or migrated data,
-private/public HTTPS entry point, and whether host-local tools/Codex UI require
-native deployment. No remote readiness claim includes those untested choices.
-
-## Local validation (2026-09-12)
-
-The full Go suite passed with PostgreSQL integration tests. The standalone EC2
-Compose file built and booted in an isolated local project on 127.0.0.1:18080,
-with no published database port. First-run administrator creation, authenticated
-settings, setup closure and account/session persistence after a stack restart
-passed. Caddy validated the supplied configuration. The temporary containers
-and their test database volume were removed afterward.
-
-This verifies the local container deployment path, not EC2 networking, DNS,
-certificate issuance or real streaming through the remote proxy; those checks
-remain part of the deployment acceptance steps above.

@@ -34,7 +34,7 @@ the modern lifecycle first and falls back to `initialize` on a legacy response.
 Standard routing and parameter headers are validated or forwarded, and result
 payloads remain structurally intact.
 
-The MVP opens a short upstream session for each operation. This trades a small
+The MCP adapter opens a short upstream session for each operation. This trades a small
 amount of latency for simple failure isolation. Session pooling can be introduced
 later without changing the database or authorization model.
 
@@ -111,7 +111,8 @@ expiry. Imported MCPs may reuse dynamic client registration metadata to create
 a Toolmux callback client. A rejected refresh changes the connection to
 `reauthorization_required` rather than silently dropping the integration.
 
-For production, supply the master key through container secrets. Database
+For production, inject the master key through the environment using your
+secret-management system. Database
 backups are insufficient to decrypt credentials without the master key. The
 administration interface requires a persistent administrator account created
 at first run. Passwords use bcrypt cost 12; browser session tokens are random,
