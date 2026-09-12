@@ -13,6 +13,7 @@ import (
 type Config struct {
 	Addr           string
 	BaseURL        string
+	GatewayURL     string
 	DatabaseURL    string
 	MasterKey      []byte
 	DiscoveryRoots []string
@@ -35,6 +36,7 @@ func Load() (Config, error) {
 		DatabaseURL:    get("TOOLMUX_DATABASE_URL", "postgres://toolmux:toolmux@127.0.0.1:5432/toolmux?sslmode=disable"),
 		DiscoveryRoots: splitPaths(get("TOOLMUX_DISCOVERY_ROOTS", "")),
 	}
+	cfg.GatewayURL = strings.TrimRight(get("TOOLMUX_GATEWAY_URL", cfg.BaseURL), "/")
 	key, err := base64.StdEncoding.DecodeString(get("TOOLMUX_MASTER_KEY", ""))
 	if err != nil || len(key) != 32 {
 		return Config{}, errors.New("TOOLMUX_MASTER_KEY must be a base64-encoded 32-byte key")

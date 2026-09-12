@@ -62,6 +62,10 @@ infrastructure template is `deploy/ec2-host.yaml`; the installer is
 Agent migration is separate from installing Toolmux.
 Keep instance details, VPN topology and deployment records outside version control.
 
+For public agent access with VPN-only administration, follow the
+[split gateway deployment](deploy/GATEWAY.md). It uses standard HTTPS for MCP and
+inference while keeping the web UI on private port 8080.
+
 ## Deployment and network interfaces
 
 See [EC2 deployment](deploy/EC2.md) for a private first-run setup, optional HTTPS,
@@ -73,7 +77,8 @@ The remote configuration is `compose.ec2.yaml`; `compose.yaml` is for developmen
 | `TOOLMUX_ADDR` | Native server listening address, including port | `127.0.0.1:8080` |
 | `TOOLMUX_BIND_IP` | Docker host interface publishing the application | `127.0.0.1` |
 | `TOOLMUX_PORT` | Docker host application port | `8080` |
-| `TOOLMUX_BASE_URL` | URL clients use, also used for OAuth callbacks and cookie security | `http://localhost:8080` locally |
+| `TOOLMUX_GATEWAY_URL` | Advertised agent URL; defaults to the administration URL | unset |
+| `TOOLMUX_BASE_URL` | Administration URL, OAuth callbacks and cookie security | `http://localhost:8080` locally |
 
 Use `0.0.0.0` for all IPv4 interfaces, or an IP assigned to the host for one
 interface. For native mode include the port: `TOOLMUX_ADDR=0.0.0.0:8080`.

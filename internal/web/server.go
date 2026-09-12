@@ -37,6 +37,7 @@ type Server struct {
 	discovery    *discovery.Scanner
 	importer     *importer.Manager
 	baseURL      string
+	gatewayURL   string
 	log          *slog.Logger
 	pages        map[string]*template.Template
 	flashes      *flashStore
@@ -52,6 +53,7 @@ type view struct {
 	CanManage, IsAdmin bool
 	Nav, Title         string
 	BaseURL            string
+	GatewayURL         string
 	Endpoint           string
 	ReturnURL          string // current page without the flash id, for return_url fields
 	AssetVersion       string
@@ -61,6 +63,7 @@ type view struct {
 
 func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, scanner *discovery.Scanner, hermes *importer.Manager, baseURL string, log *slog.Logger) (*Server, error) {
 	s := &Server{store: store, checker: check, oauth: oauth, discovery: scanner, importer: hermes, baseURL: strings.TrimRight(baseURL, "/"), log: log, pages: make(map[string]*template.Template), flashes: newFlashStore()}
+	s.gatewayURL = s.baseURL
 	version, err := assetVersion()
 	if err != nil {
 		return nil, err
@@ -84,6 +87,14 @@ func New(store *store.Store, check *checker.Checker, oauth *oauth.Manager, scann
 		s.pages[strings.TrimSuffix(path.Base(file), ".html")] = page
 	}
 	return s, nil
+}
+
+// SetGatewayURL selects the advertised agent endpoint independently of the admin URL.
+// Call before serving requests.
+func (s *Server) SetGatewayURL(value string) {
+	if value != "" {
+		s.gatewayURL = strings.TrimRight(value, "/")
+	}
 }
 
 // assetVersion fingerprints the static assets so browsers can cache them
@@ -193,7 +204,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		s.fail(w, fmt.Errorf("unknown page %q", page))
 		return
 	}
-	v := view{Nav: nav, Title: title, BaseURL: s.baseURL, Endpoint: s.baseURL + "/mcp", ReturnURL: currentPage(r), AssetVersion: s.assetVersion, Flash: s.flashes.take(r.URL.Query().Get("f")), Data: data}
+	v := view{Nav: nav, Title: title, BaseURL: s.baseURL, GatewayURL: s.gatewayURL, Endpoint: s.gatewayURL + "/mcp", ReturnURL: currentPage(r), AssetVersion: s.assetVersion, Flash: s.flashes.take(r.URL.Query().Get("f")), Data: data}
 	v.User = currentUser(r)
 	v.CanManage = v.User.CanManage()
 	v.IsAdmin = v.User.IsAdmin()

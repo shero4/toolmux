@@ -85,12 +85,13 @@ func main() {
 	oauthManager := oauth.New(db, cfg.BaseURL)
 	health := checker.New(db, executor, oauthManager, log)
 	detector := discovery.New(cfg.DiscoveryRoots)
-	hermesImporter := importer.New(db, detector, cfg.BaseURL)
+	hermesImporter := importer.New(db, detector, cfg.GatewayURL)
 	ui, err := webui.New(db, health, oauthManager, detector, hermesImporter, cfg.BaseURL, log)
 	if err != nil {
 		log.Error("initialize web interface", "error", err)
 		os.Exit(1)
 	}
+	ui.SetGatewayURL(cfg.GatewayURL)
 	mcpHandler := mcp.NewHandler(db, executor, oauthManager, log)
 	adminHandler := control.New(db, health, hermesImporter, control.Token(cfg.MasterKey))
 	// Tool calls may legitimately run for up to an hour, so responses are not

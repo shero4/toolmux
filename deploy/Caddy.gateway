@@ -1,0 +1,11 @@
+{$TOOLMUX_DOMAIN} {
+    @agent path /mcp /v1/*
+    handle @agent {
+        reverse_proxy 127.0.0.1:8080 {
+            flush_interval -1
+        }
+    }
+    handle {
+        respond "Not found" 404
+    }
+}

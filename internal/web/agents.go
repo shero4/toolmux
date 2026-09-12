@@ -143,7 +143,7 @@ func (s *Server) tokenFlash(agent store.Agent, token, message string) flash {
 }
 
 func (s *Server) setupGuide(agent store.Agent, token string) setupGuide {
-	endpoint := s.baseURL + "/mcp"
+	endpoint := s.gatewayURL + "/mcp"
 	switch agent.Runtime {
 	case "hermes":
 		config := "mcp_servers:\n  toolmux:\n    url: \"" + endpoint + "\"\n    headers:\n      Authorization: \"Bearer " + token + "\"\n    enabled: true\n    supports_parallel_tool_calls: true"
