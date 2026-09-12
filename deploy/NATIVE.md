@@ -82,6 +82,14 @@ its dependencies. A fresh installation has no migrated agents or upstream tool
 credentials. Codex bridge installation does not sign into the subscription:
 complete the device authorization from Models → Codex sign-in when required.
 
+The standard-library adapter at `deploy/business_api_mcp.py` can register an
+existing Zammad, Zoho Bigin, or RazorpayX Payroll account as a local stdio MCP
+connection. Run it with `zammad`, `bigin`, or `xpayroll`; keep the required
+credential environment on the connection so Toolmux encrypts it in the database.
+The adapter fixes each upstream host, accepts relative API paths for Zammad and
+Bigin, and exposes only the documented operation list for Payroll. It does not
+add a new vendor account or copy credentials into the repository.
+
 Toolmux listens on `127.0.0.1:8080`. For native deployments, TOOLMUX_ADDR selects
 the actual interface; `0.0.0.0:8080` would expose all IPv4 interfaces, subject to
 firewall/security-group rules. TOOLMUX_BASE_URL selects the administration URL,
