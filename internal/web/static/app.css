@@ -449,6 +449,19 @@ pre.code-block { padding: 14px 16px; border: 0; border-radius: 0; background: tr
 .auth-card .panel-body { padding: 28px; }
 .auth-lede { margin: 10px 0 24px; }
 
+/* Codex sign-in keeps live status, user action, and operational context distinct. */
+.codex-card { overflow: hidden; }
+.codex-state, .codex-device, .codex-notes { display: grid; gap: 8px; }
+.codex-state { padding-block: 18px; }
+.codex-state h2 { font-size: 18px; line-height: 1.35; }
+.eyebrow { color: var(--text-3); font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+.codex-device { gap: 12px; background: var(--accent-soft); }
+.codex-code-row { display: flex; align-items: center; gap: 10px; }
+.codex-code-row code { min-width: 0; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 17px; font-weight: 650; letter-spacing: 0.04em; user-select: all; }
+.codex-notes { gap: 10px; }
+.codex-actions { display: flex; justify-content: flex-start; }
+.codex-actions form { margin: 0; }
+
 @media (max-width: 1100px) {
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -487,6 +500,8 @@ pre.code-block { padding: 14px 16px; border: 0; border-radius: 0; background: tr
   .filters input[type="search"] { flex-basis: 100%; }
   .filters select { flex: 1 1 140px; }
   .pager { flex-wrap: wrap; }
+  .codex-code-row { align-items: stretch; flex-direction: column; }
+  .codex-code-row .btn { align-self: flex-start; }
 }
 /* A bounded review surface for token updates; long local paths wrap. */
 .rotation-dialog { width:min(640px,calc(100vw - 32px)); max-height:85vh; padding:0; border:1px solid var(--border); border-radius:12px; background:var(--bg); color:inherit; overflow:auto; }
