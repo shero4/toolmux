@@ -18,7 +18,6 @@
       <a href="/" {{if eq .Nav "overview"}}aria-current="page"{{end}}>{{template "icon-overview"}}<span>Overview</span></a>
       <a href="/agents" {{if eq .Nav "agents"}}aria-current="page"{{end}}>{{template "icon-agents"}}<span>Agents</span></a>
       <a href="/connections" {{if eq .Nav "connections"}}aria-current="page"{{end}}>{{template "icon-connections"}}<span>Connections</span></a>
-      <a href="/tools" {{if eq .Nav "tools"}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Tools</span></a>
       <a href="/activity" {{if eq .Nav "activity"}}aria-current="page"{{end}}>{{template "icon-activity"}}<span>Activity</span></a>
       <a href="/providers" {{if eq .Nav "providers"}}aria-current="page"{{end}}>{{template "icon-connections"}}<span>Models</span></a>
       <a href="/settings" {{if or (eq .Nav "settings") (eq .Nav "users") (eq .Nav "operations")}}aria-current="page"{{end}}>{{template "icon-tools"}}<span>Administration</span></a>

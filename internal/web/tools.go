@@ -51,7 +51,7 @@ func (s *Server) tools(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "tools", "tools", "Tools", toolsPage{Tools: tools, Connections: connections, Filter: filter, Pager: pagination})
+	s.render(w, r, http.StatusOK, "tools", "connections", "All tools", toolsPage{Tools: tools, Connections: connections, Filter: filter, Pager: pagination})
 }
 
 // declarativeConnections lists the connections that accept defined tools.
@@ -81,7 +81,7 @@ func (s *Server) newTool(w http.ResponseWriter, r *http.Request) {
 			form.Kind = "command"
 		}
 	}
-	s.render(w, r, http.StatusOK, "tool_new", "tools", "Define tool", form)
+	s.render(w, r, http.StatusOK, "tool_new", "connections", "Define tool", form)
 }
 
 func (s *Server) createTool(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +93,7 @@ func (s *Server) createTool(w http.ResponseWriter, r *http.Request) {
 	reject := func(form toolForm, message string) {
 		form.Connections = connections
 		form.Error = message
-		s.render(w, r, http.StatusBadRequest, "tool_new", "tools", "Define tool", form)
+		s.render(w, r, http.StatusBadRequest, "tool_new", "connections", "Define tool", form)
 	}
 	if err := r.ParseForm(); err != nil {
 		reject(toolForm{}, "The form could not be read.")
@@ -189,7 +189,7 @@ func (s *Server) tool(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "tool", "tools", detail.ExposedName, toolPage{Tool: detail})
+	s.render(w, r, http.StatusOK, "tool", "connections", detail.ExposedName, toolPage{Tool: detail})
 }
 
 func (s *Server) deleteTool(w http.ResponseWriter, r *http.Request) {

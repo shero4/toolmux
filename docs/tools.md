@@ -21,7 +21,7 @@ to individual grants for the remaining tools.
 ## Expose an HTTP API
 
 Create an `HTTP API` connection with the service's base URL and authorization.
-Then define each permitted operation on the Tools page. Paths, query values,
+Then open that connection and choose **Define tool** for each permitted operation. Paths, query values,
 headers, and JSON bodies may reference top-level inputs as `${input_name}`.
 An operation may use a relative path or a complete HTTP URL. Authorization can
 be a bearer token, OAuth 2.0 token, or any named credential header.
@@ -43,3 +43,6 @@ Toolmux uses Authorization Code with PKCE and refreshes saved credentials before
 expiry. Use **Authorize** when sign-in is needed again. A provider may support
 dynamic client registration; otherwise supply its client ID and required secret.
 Keep the callback on the administration address in a split gateway deployment.
+
+Use **Connections → Browse all tools** to search the combined catalog. Define
+and inspect actions inside a connection; assign agent access from **Agents**.

@@ -1,7 +1,7 @@
 {{define "content"}}{{$f := .Data}}
 <header class="page-header">
   <div>
-    <p class="crumbs"><a href="/tools">Tools</a> / New</p>
+    <p class="crumbs"><a href="/connections">Connections</a>{{range $f.Connections}}{{if eq .ID $f.ConnectionID}} / <a href="/connections/{{.ID}}">{{.Name}}</a>{{end}}{{end}} / Define tool</p>
     <h1>Define tool</h1>
     <p class="lede">Describe one operation an agent may call. Templates reference call inputs as <span class="mono">${name}</span>.</p>
   </div>

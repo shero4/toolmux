@@ -5,7 +5,8 @@
     <p class="lede">Upstream MCP servers, HTTP APIs, and installed commands. Credentials stay encrypted here and never reach agents.</p>
   </div>
   <div class="page-actions">
-    {{if $.CanManage}}<a class="btn" href="/agents/discover">Import from Hermes</a>{{end}}
+    <a class="btn" href="/tools">Browse all tools</a>
+    {{if $.CanManage}}<a class="btn" href="/agents/discover">Discover local profiles</a>{{end}}
     {{if $.CanManage}}<a class="btn btn-primary" href="/connections/new">New connection</a>{{end}}
   </div>
 </header>

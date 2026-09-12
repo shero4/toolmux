@@ -1,11 +1,12 @@
 {{define "content"}}{{$d := .Data}}
 <header class="page-header">
   <div>
-    <h1>Tools</h1>
-    <p class="lede">Everything agents can be granted. MCP tools are discovered from their servers; HTTP and command tools are defined here.</p>
+    <p class="crumbs"><a href="/connections">Connections</a> / All tools</p>
+    <h1>All tools</h1>
+    <p class="lede">Browse actions across your connections. Open a connection to discover or define its tools; manage agent access from Agents.</p>
   </div>
   <div class="page-actions">
-    {{if $.CanManage}}<a class="btn btn-primary" href="/tools/new">Define tool</a>{{end}}
+    <a class="btn" href="/connections">View connections</a>
   </div>
 </header>
 

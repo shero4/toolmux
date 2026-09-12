@@ -1,7 +1,7 @@
 {{define "content"}}{{$t := .Data.Tool}}
 <header class="page-header">
   <div>
-    <p class="crumbs"><a href="/tools">Tools</a> / <a href="/connections/{{$t.ConnectionID}}">{{$t.ConnectionName}}</a></p>
+    <p class="crumbs"><a href="/connections">Connections</a> / <a href="/connections/{{$t.ConnectionID}}">{{$t.ConnectionName}}</a></p>
     <h1 class="mono">{{$t.ExposedName}}{{if not $t.Enabled}} <span class="badge badge-muted">No longer upstream</span>{{end}}</h1>
     <p class="lede">{{if $t.Title}}{{$t.Title}} · {{end}}{{kind $t.Kind}} tool on {{$t.ConnectionName}}.</p>
   </div>
