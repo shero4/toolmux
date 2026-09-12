@@ -164,7 +164,7 @@ func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
 		summary := oauthSummary{HasAccess: credential.AccessToken != "", HasRefresh: credential.RefreshToken != "", ExpiresAt: credential.ExpiresAt}
 		if config, err := s.store.GetOAuthConfig(ctx, connection.ID); err == nil {
 			summary.ClientID, summary.AuthorizationURL, summary.TokenURL = config.ClientID, config.AuthorizationURL, config.TokenURL
-			summary.Registered = config.RedirectURI == s.baseURL+"/oauth/callback"
+			summary.Registered = config.RedirectURI == s.gatewayURL+"/oauth/callback"
 		}
 		page.OAuth = &summary
 	}
@@ -252,23 +252,24 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
+	operatorURL := func(path string) string { return s.baseURL + path }
 	if providerError := r.URL.Query().Get("error"); providerError != "" {
-		s.redirect(w, r, "/connections", errorFlash("The provider did not complete authorization: "+providerError))
+		s.redirect(w, r, operatorURL("/connections"), errorFlash("The provider did not complete authorization: "+providerError))
 		return
 	}
 	stateValue, code := r.URL.Query().Get("state"), r.URL.Query().Get("code")
 	if stateValue == "" || code == "" {
-		s.redirect(w, r, "/connections", errorFlash("The OAuth callback was incomplete."))
+		s.redirect(w, r, operatorURL("/connections"), errorFlash("The OAuth callback was incomplete."))
 		return
 	}
 	connectionID, err := s.oauth.Complete(r.Context(), stateValue, code)
 	if err != nil {
 		s.log.Error("complete OAuth authorization", "error", err)
-		s.redirect(w, r, "/connections", errorFlash("The OAuth token exchange failed. Start the authorization again."))
+		s.redirect(w, r, operatorURL("/connections"), errorFlash("The OAuth token exchange failed. Start the authorization again."))
 		return
 	}
 	s.runCheck(r, connectionID)
-	s.redirect(w, r, "/connections/"+connectionID, s.checkFlash(r, connectionID))
+	s.redirect(w, r, operatorURL("/connections/"+connectionID), s.checkFlash(r, connectionID))
 }
 
 func (s *Server) enableConnection(w http.ResponseWriter, r *http.Request) {

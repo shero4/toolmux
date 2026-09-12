@@ -38,11 +38,12 @@ Per-tool timeouts prevent accidental hangs and may be set up to one hour.
 
 ## OAuth connections
 
-Register `<administration-base-url>/oauth/callback` with the upstream provider.
+Register `<gateway-base-url>/oauth/callback` with the upstream provider. In a
+split deployment, this is the single public callback route; the dashboard stays
+private and the callback returns the browser to it after validating one-time state.
 Toolmux uses Authorization Code with PKCE and refreshes saved credentials before
 expiry. Use **Authorize** when sign-in is needed again. A provider may support
 dynamic client registration; otherwise supply its client ID and required secret.
-Keep the callback on the administration address in a split gateway deployment.
 
 Use **Connections → Browse all tools** to search the combined catalog. Define
 and inspect actions inside a connection; assign agent access from **Agents**.

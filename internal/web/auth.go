@@ -55,7 +55,7 @@ type authPage struct {
 
 func (s *Server) authenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/healthz" || r.URL.Path == "/mcp" || r.URL.Path == "/admin/mcp" || strings.HasPrefix(r.URL.Path, "/v1/") {
+		if strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/healthz" || r.URL.Path == "/mcp" || r.URL.Path == "/admin/mcp" || r.URL.Path == "/oauth/callback" || strings.HasPrefix(r.URL.Path, "/v1/") {
 			next.ServeHTTP(w, r)
 			return
 		}

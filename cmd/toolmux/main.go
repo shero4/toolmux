@@ -82,7 +82,9 @@ func main() {
 	}
 	mcpClient := mcp.NewClient()
 	executor := execute.New(db, mcpClient)
-	oauthManager := oauth.New(db, cfg.BaseURL)
+	// OAuth providers require a stable HTTPS callback. The operator UI may be
+	// private, while the narrowly exposed gateway accepts the callback itself.
+	oauthManager := oauth.New(db, cfg.GatewayURL)
 	health := checker.New(db, executor, oauthManager, log)
 	detector := discovery.New(cfg.DiscoveryRoots)
 	hermesImporter := importer.New(db, detector, cfg.GatewayURL)

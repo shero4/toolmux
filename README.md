@@ -95,7 +95,8 @@ Choose the layout that fits where your tools run:
 
 The public gateway uses standard ports 443/80. The administration interface can
 stay on private port 8080, while clients on the host use loopback. Deployment
-guides cover initial setup, DNS, TLS, persistent data, backups, and upgrades.
+guides cover initial setup, DNS, TLS, provider OAuth callbacks, persistent data,
+backups, and upgrades.
 
 ## Documentation
 

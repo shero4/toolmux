@@ -94,8 +94,8 @@ func TestBrowserRoles(t *testing.T) {
 			t.Fatalf("viewer mutation %s=%d", path, w.Code)
 		}
 	}
-	if w := do("viewer", "GET", "/oauth/callback", nil); w.Code != 403 {
-		t.Fatal("viewer OAuth callback allowed")
+	if w := do("viewer", "GET", "/oauth/callback", nil); w.Code != 303 {
+		t.Fatalf("state-gated OAuth callback unavailable: %d", w.Code)
 	}
 	if w := do("operator", "POST", "/users", url.Values{"username": {"escalated"}, "password": {"initial-user-password"}, "confirm": {"initial-user-password"}, "role": {"admin"}}); w.Code != 403 {
 		t.Fatal("operator created admin")
