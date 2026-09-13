@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,8 +38,12 @@ func main() {
 		printSecrets()
 		return
 	}
-	if len(os.Args) == 3 && os.Args[1] == "gws-call" {
-		if err := runGWS(os.Args[2]); err != nil {
+	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == "gws-call" {
+		configDir := ""
+		if len(os.Args) == 4 {
+			configDir = os.Args[3]
+		}
+		if err := runGWS(os.Args[2], configDir); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -119,17 +124,18 @@ func main() {
 var gwsPart = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 
 type gwsRequest struct {
-	Service     string          `json:"service"`
-	Resource    string          `json:"resource"`
-	SubResource string          `json:"sub_resource"`
-	Method      string          `json:"method"`
-	Params      json.RawMessage `json:"params"`
-	Body        json.RawMessage `json:"body"`
-	PageAll     bool            `json:"page_all"`
-	PageLimit   int             `json:"page_limit"`
+	Service      string          `json:"service"`
+	Resource     string          `json:"resource"`
+	SubResource  string          `json:"sub_resource"`
+	SubResources []string        `json:"sub_resources"`
+	Method       string          `json:"method"`
+	Params       json.RawMessage `json:"params"`
+	Body         json.RawMessage `json:"body"`
+	PageAll      bool            `json:"page_all"`
+	PageLimit    int             `json:"page_limit"`
 }
 
-func runGWS(executable string) error {
+func runGWS(executable, configDir string) error {
 	var request gwsRequest
 	decoder := json.NewDecoder(os.Stdin)
 	decoder.DisallowUnknownFields()
@@ -144,10 +150,16 @@ func runGWS(executable string) error {
 	if request.SubResource != "" && !gwsPart.MatchString(request.SubResource) {
 		return errors.New("sub_resource must be a simple API name")
 	}
+	for _, value := range request.SubResources {
+		if !gwsPart.MatchString(value) {
+			return errors.New("sub_resources entries must be simple API names")
+		}
+	}
 	arguments := []string{request.Service, request.Resource}
 	if request.SubResource != "" {
 		arguments = append(arguments, request.SubResource)
 	}
+	arguments = append(arguments, request.SubResources...)
 	arguments = append(arguments, request.Method)
 	if value, err := compactJSON(request.Params); err != nil {
 		return fmt.Errorf("params: %w", err)
@@ -169,9 +181,24 @@ func runGWS(executable string) error {
 		arguments = append(arguments, "--page-limit", fmt.Sprint(request.PageLimit))
 	}
 	command := exec.Command(executable, arguments...)
+	command.Env = os.Environ()
+	if configDir != "" {
+		command.Env = setProcessEnv(command.Env, "GOOGLE_WORKSPACE_CLI_CONFIG_DIR", configDir)
+	}
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	return command.Run()
+}
+
+func setProcessEnv(environment []string, name, value string) []string {
+	prefix := name + "="
+	result := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func compactJSON(value json.RawMessage) (string, error) {

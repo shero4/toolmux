@@ -451,7 +451,7 @@ func discoverGWS() []GWSConnection {
 }
 
 func gwsSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"service":{"type":"string"},"resource":{"type":"string"},"sub_resource":{"type":"string"},"method":{"type":"string"},"params":{"type":"object"},"body":{"type":"object"},"page_all":{"type":"boolean"},"page_limit":{"type":"integer","minimum":1,"maximum":100}},"required":["service","resource","method"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"service":{"type":"string"},"resource":{"type":"string"},"sub_resource":{"type":"string"},"sub_resources":{"type":"array","items":{"type":"string"}},"method":{"type":"string"},"params":{"type":"object"},"body":{"type":"object"},"page_all":{"type":"boolean"},"page_limit":{"type":"integer","minimum":1,"maximum":100}},"required":["service","resource","method"],"additionalProperties":false}`)
 }
 
 func writeToolmuxServer(path, endpoint, token string) error {
