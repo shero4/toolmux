@@ -314,7 +314,13 @@ func (h *Handler) callTool(w http.ResponseWriter, ctx context.Context, id, raw j
 	if err != nil {
 		h.log.Error("call upstream", "tool", tool.ExposedName, "error", err)
 		h.audit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "error", err.Error(), time.Since(start))
-		h.writeError(w, id, -32603, "upstream tool failed")
+		// Report the failure as a tool result with isError (the MCP convention
+		// for tool execution errors) so the agent can read the upstream
+		// detail and correct its call, instead of a bare JSON-RPC error.
+		h.writeResult(w, id, h.decorate(map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "upstream tool failed: " + truncateError(err.Error(), 2048)}},
+			"isError": true,
+		}, modern))
 		return
 	}
 	h.audit(ctx, agent.ID, connection.ID, tool.ID, "tools/call", "allowed", "", time.Since(start))
@@ -395,4 +401,12 @@ func rawID(id json.RawMessage) any {
 		return nil
 	}
 	return value
+}
+
+// truncateError bounds an upstream error message before it is returned to an agent.
+func truncateError(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
 }

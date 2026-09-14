@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -185,9 +186,40 @@ func runGWS(executable, configDir string) error {
 	if configDir != "" {
 		command.Env = setProcessEnv(command.Env, "GOOGLE_WORKSPACE_CLI_CONFIG_DIR", configDir)
 	}
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	return command.Run()
+	// Mirror the CLI's output to our own streams, but keep a bounded copy so a
+	// failure can report WHY: the Google Workspace CLI writes its error JSON to
+	// stdout and exits 1, and the outer command tool only forwards stderr, so
+	// without this the agent just sees "exit status 1".
+	var captured bytes.Buffer
+	limited := &boundedWriter{limit: 4096, buf: &captured}
+	command.Stdout = io.MultiWriter(os.Stdout, limited)
+	command.Stderr = io.MultiWriter(os.Stderr, limited)
+	if err := command.Run(); err != nil {
+		detail := strings.TrimSpace(captured.String())
+		if detail == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, detail)
+	}
+	return nil
+}
+
+// boundedWriter keeps the first “limit“ bytes written to it and drops the rest.
+type boundedWriter struct {
+	limit int
+	buf   *bytes.Buffer
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	remaining := w.limit - w.buf.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			w.buf.Write(p[:remaining])
+		} else {
+			w.buf.Write(p)
+		}
+	}
+	return len(p), nil
 }
 
 func setProcessEnv(environment []string, name, value string) []string {

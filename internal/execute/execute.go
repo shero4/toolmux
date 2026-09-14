@@ -222,7 +222,17 @@ func (r *Router) callCommand(ctx context.Context, tool store.Tool, credential st
 		if callCtx.Err() != nil {
 			return nil, fmt.Errorf("command tool: %w", callCtx.Err())
 		}
-		return nil, fmt.Errorf("command tool failed: %w: %s", err, truncate(stderr.String(), 512))
+		detail := strings.TrimSpace(stderr.String())
+		if out := strings.TrimSpace(string(stdout.Bytes())); out != "" {
+			// CLIs such as the Google Workspace CLI report errors as JSON on
+			// stdout with a non-zero exit; without this the caller only sees
+			// "exit status 1".
+			if detail != "" {
+				detail += " | "
+			}
+			detail += out
+		}
+		return nil, fmt.Errorf("command tool failed: %w: %s", err, truncate(detail, 1024))
 	}
 	if stdout.exceeded {
 		return nil, errors.New("command output exceeded its configured limit")
