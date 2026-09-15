@@ -20,6 +20,11 @@ from typing import Any
 
 PROTOCOL_VERSION = "2025-06-18"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+# Files cross between Toolmux and the Hermes agents only through this directory.
+EXCHANGE_DIR = Path(os.environ.get("TOOLMUX_EXCHANGE_DIR", "/var/lib/hermes/shared/exchange"))
+RETRY_STATUSES = {429, 503}
+RETRY_ATTEMPTS = 4
+RETRY_MAX_WAIT = 20.0
 
 XPAYROLL_OPERATIONS = {
     "people.create": ("/api/people", "POST", "people", "create"),
@@ -52,6 +57,8 @@ def require_env(*names: str) -> list[str]:
 
 def relative_endpoint(value: Any) -> str:
     raw_endpoint = str(value or "").strip()
+    if raw_endpoint.lower().startswith(("http://", "https://")):
+        raise ValueError("endpoint must be a relative API path such as 'Deals?fields=Deal_Name,Stage&per_page=200' (the base URL is configured on the connection)")
     if raw_endpoint.startswith(("//", "\\")):
         raise ValueError("endpoint must be a relative API path")
     endpoint = raw_endpoint.lstrip("/")
@@ -67,34 +74,110 @@ def relative_endpoint(value: Any) -> str:
     return endpoint
 
 
+def exchange_path(name: Any) -> Path:
+    cleaned = str(name or "").strip().replace("\\", "/")
+    if not cleaned or cleaned.startswith("/") or ".." in cleaned.split("/"):
+        raise ValueError("download_to/upload_file must be a file name relative to the exchange directory")
+    full = EXCHANGE_DIR / cleaned
+    full.parent.mkdir(parents=True, exist_ok=True)
+    return full
+
+
+def multipart_body(fields: dict[str, Any], file_field: str, path: Path) -> tuple[bytes, str]:
+    import mimetypes
+    import uuid
+
+    boundary = "toolmux-" + uuid.uuid4().hex
+    parts: list[bytes] = []
+    for key, value in (fields or {}).items():
+        text = value if isinstance(value, str) else json.dumps(value)
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{text}\r\n".encode("utf-8"))
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; filename=\"{path.name}\"\r\nContent-Type: {mime}\r\n\r\n".encode("utf-8")
+        + path.read_bytes()
+        + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def retry_after_seconds(response: Any, attempt: int) -> float:
+    value = ""
+    try:
+        value = response.headers.get("Retry-After", "") or ""
+    except AttributeError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return float(2 ** attempt)
+
+
 def request_json(
     url: str,
     method: str = "GET",
     *,
     headers: dict[str, str] | None = None,
     body: Any = None,
+    download_to: Any = None,
+    upload: tuple[dict[str, Any], str, Path] | None = None,
 ) -> tuple[int, Any]:
-    data = None if body is None else json.dumps(body).encode("utf-8")
     request_headers = {
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (compatible; Toolmux/1.0; +https://github.com/shero4/toolmux)",
         **(headers or {}),
     }
-    if data is not None:
-        request_headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
-    try:
-        response = urllib.request.urlopen(request, timeout=45)
-    except urllib.error.HTTPError as error:
-        response = error
+    if upload is not None:
+        data, content_type = multipart_body(*upload)
+        request_headers["Content-Type"] = content_type
+    else:
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        if data is not None:
+            request_headers["Content-Type"] = "application/json"
+    for attempt in range(RETRY_ATTEMPTS):
+        request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+        try:
+            response = urllib.request.urlopen(request, timeout=45)
+        except urllib.error.HTTPError as error:
+            response = error
+        # 429 and 503 mean the request was not processed, so replaying is safe
+        # even for writes; anything else is returned as-is.
+        if response.status in RETRY_STATUSES and attempt < RETRY_ATTEMPTS - 1:
+            wait = retry_after_seconds(response, attempt)
+            with response:
+                response.read(4096)
+            if wait > RETRY_MAX_WAIT:
+                break
+            time.sleep(wait)
+            continue
+        break
     with response:
         raw = response.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("upstream response exceeded 8 MiB")
+        content_type = ""
+        try:
+            content_type = response.headers.get("Content-Type", "") or ""
+        except AttributeError:
+            pass
+        if download_to:
+            target = exchange_path(download_to)
+            target.write_bytes(raw)
+            target.chmod(0o644)
+            return response.status, {"saved_file": str(target), "bytes": len(raw), "contentType": content_type}
         try:
             value = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            value = raw.decode("utf-8", errors="replace")
+            if "json" not in content_type and "text" not in content_type and raw:
+                value = {
+                    "binary": True,
+                    "contentType": content_type,
+                    "bytes": len(raw),
+                    "hint": "non-text response; repeat the call with download_to=<file name> to save it in the exchange directory",
+                }
+            else:
+                value = raw.decode("utf-8", errors="replace")
         return response.status, value
 
 
@@ -104,11 +187,19 @@ def zammad_call(arguments: dict[str, Any]) -> tuple[int, Any]:
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
         raise ValueError("unsupported method")
     endpoint = relative_endpoint(arguments.get("endpoint"))
+    # The base URL already ends in /api/v1; agents often repeat it.
+    if endpoint.startswith("api/v1/"):
+        endpoint = endpoint[len("api/v1/"):]
+    upload = None
+    if arguments.get("upload_file"):
+        upload = (arguments.get("fields") or {}, str(arguments.get("file_field") or "File"), exchange_path(arguments["upload_file"]))
     return request_json(
         base_url.rstrip("/") + "/" + endpoint,
         method,
         headers={"Authorization": "Token token=" + token},
         body=arguments.get("body") if method in {"POST", "PUT", "PATCH"} else None,
+        download_to=arguments.get("download_to"),
+        upload=upload,
     )
 
 
@@ -181,11 +272,16 @@ def bigin_call(arguments: dict[str, Any]) -> tuple[int, Any]:
     if method not in {"GET", "POST", "PUT", "DELETE"}:
         raise ValueError("unsupported method")
     endpoint = relative_endpoint(arguments.get("endpoint"))
+    upload = None
+    if arguments.get("upload_file"):
+        upload = (arguments.get("fields") or {}, str(arguments.get("file_field") or "file"), exchange_path(arguments["upload_file"]))
     return request_json(
         base_url.rstrip("/") + "/" + endpoint,
         method,
         headers={"Authorization": "Zoho-oauthtoken " + token},
         body=arguments.get("body") if method in {"POST", "PUT"} else None,
+        download_to=arguments.get("download_to"),
+        upload=upload,
     )
 
 
@@ -213,15 +309,19 @@ def tools(provider: str) -> list[dict[str, Any]]:
         return [{
             "name": "request",
             "title": "Zammad API request",
-            "description": "Read or update the configured Bugbase Zammad account using a relative API endpoint.",
+            "description": "Read or update the configured Bugbase Zammad account using a relative API endpoint (relative to /api/v1, e.g. 'tickets/search?query=state.name:open&limit=20').",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["endpoint"],
                 "properties": {
                     "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "GET"},
-                    "endpoint": {"type": "string", "description": "Relative Zammad API path."},
+                    "endpoint": {"type": "string", "description": "Zammad API path relative to /api/v1, e.g. 'tickets/123' or 'ticket_articles/by_ticket/123'."},
                     "body": common_body,
+                    "download_to": {"type": "string", "description": "File name to save the raw response into the shared exchange directory (attachments, PDFs). The result reports the saved path."},
+                    "upload_file": {"type": "string", "description": "File name in the shared exchange directory to send as a multipart file upload."},
+                    "file_field": {"type": "string", "description": "Multipart field name for upload_file (default: File)."},
+                    "fields": {"type": "object", "additionalProperties": True, "description": "Extra multipart form fields sent with upload_file."},
                 },
             },
         }]
@@ -229,15 +329,19 @@ def tools(provider: str) -> list[dict[str, Any]]:
         return [{
             "name": "request",
             "title": "Zoho Bigin API request",
-            "description": "Read or update the configured Bugbase Bigin CRM account using a relative API endpoint.",
+            "description": "Read or update the configured Bugbase Bigin CRM account using a relative API v2 endpoint. List calls need the 'fields' query parameter, e.g. 'Deals?fields=Deal_Name,Stage,Amount&per_page=200'.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["endpoint"],
                 "properties": {
                     "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET"},
-                    "endpoint": {"type": "string", "description": "Relative Bigin API v2 path."},
+                    "endpoint": {"type": "string", "description": "Bigin API v2 path relative to the base, e.g. 'Deals?fields=Deal_Name,Stage&per_page=200' or 'Deals/123/Attachments'."},
                     "body": common_body,
+                    "download_to": {"type": "string", "description": "File name to save the raw response into the shared exchange directory (attachments, PDFs). The result reports the saved path."},
+                    "upload_file": {"type": "string", "description": "File name in the shared exchange directory to send as a multipart file upload."},
+                    "file_field": {"type": "string", "description": "Multipart field name for upload_file (default: file)."},
+                    "fields": {"type": "object", "additionalProperties": True, "description": "Extra multipart form fields sent with upload_file."},
                 },
             },
         }]

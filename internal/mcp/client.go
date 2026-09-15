@@ -227,7 +227,7 @@ func (s *session) send(ctx context.Context, payload rpcRequest, expectResponse b
 		req.Header.Set("Mcp-Session-Id", s.sessionID)
 	}
 	s.applyCredential(req)
-	resp, err := s.client.http.Do(req)
+	resp, err := DoWithRetry(ctx, s.client.http, req, body)
 	if err != nil {
 		return rpcResponse{}, fmt.Errorf("reach upstream: %w", err)
 	}

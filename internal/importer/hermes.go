@@ -252,7 +252,7 @@ func (m *Manager) ImportAll(ctx context.Context, inventory Inventory) (Summary, 
 		}
 		args, _ := json.Marshal([]string{"gws-call", gws.Executable})
 		if err := m.store.EnsureCommandTool(ctx, connectionID, "request", "Call Google Workspace", "Calls an authorized Google Workspace API through this local identity.", gwsSchema(), store.CommandToolSpec{
-			Executable: executable, ArgsTemplate: args, StdinMode: "json", TimeoutMS: 60_000, MaxOutputBytes: 4 << 20,
+			Executable: executable, ArgsTemplate: args, StdinMode: "json", TimeoutMS: 240_000, MaxOutputBytes: 4 << 20,
 		}); err != nil {
 			return summary, fmt.Errorf("configure %s: %w", gws.Name, err)
 		}
@@ -451,7 +451,7 @@ func discoverGWS() []GWSConnection {
 }
 
 func gwsSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"service":{"type":"string"},"resource":{"type":"string"},"sub_resource":{"type":"string"},"sub_resources":{"type":"array","items":{"type":"string"}},"method":{"type":"string"},"params":{"type":"object"},"body":{"type":"object"},"page_all":{"type":"boolean"},"page_limit":{"type":"integer","minimum":1,"maximum":100}},"required":["service","resource","method"],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"service":{"type":"string"},"resource":{"type":"string"},"sub_resource":{"type":"string"},"sub_resources":{"type":"array","items":{"type":"string"}},"method":{"type":"string"},"params":{"type":"object"},"body":{"type":"object"},"page_all":{"type":"boolean"},"page_limit":{"type":"integer","minimum":1,"maximum":100},"download_to":{"type":"string","description":"File name to save binary or attachment content into the shared exchange directory (Drive files.get alt=media, files.export, Gmail messages.attachments.get). The result reports the saved path instead of inline bytes."},"upload_file":{"type":"string","description":"File name in the shared exchange directory to upload as media content (Drive files.create/update)."}},"required":["service","resource","method"],"additionalProperties":false}`)
 }
 
 func writeToolmuxServer(path, endpoint, token string) error {

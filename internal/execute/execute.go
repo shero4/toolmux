@@ -162,7 +162,11 @@ func (r *Router) callHTTP(ctx context.Context, tool store.Tool, connection store
 		req.Header.Set(key, value)
 	}
 	applyCredential(req, connection, credential)
-	resp, err := r.http.Do(req)
+	var payload []byte
+	if body != nil {
+		payload, _ = io.ReadAll(body)
+	}
+	resp, err := mcp.DoWithRetry(callCtx, r.http, req, payload)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP tool request: %w", err)
 	}
@@ -235,7 +239,7 @@ func (r *Router) callCommand(ctx context.Context, tool store.Tool, credential st
 		return nil, fmt.Errorf("command tool failed: %w: %s", err, truncate(detail, 1024))
 	}
 	if stdout.exceeded {
-		return nil, errors.New("command output exceeded its configured limit")
+		return nil, fmt.Errorf("command output exceeded its configured limit of %d bytes; narrow the request (fewer pages, format=metadata, or download_to for binary content)", spec.MaxOutputBytes)
 	}
 	return toolResult(stdout.Bytes()), nil
 }
@@ -398,22 +402,30 @@ func truncate(value string, limit int) string {
 	return value
 }
 
+// limitedBuffer keeps at most “limit“ bytes. It deliberately does NOT embed
+// bytes.Buffer: an embedded Buffer promotes ReadFrom, and os/exec copies a
+// child's stdout with io.Copy, which prefers ReadFrom over Write, so the cap
+// was silently bypassed (a 9 MB Gmail raw message passed a 4 MiB limit).
 type limitedBuffer struct {
-	bytes.Buffer
+	buffer   bytes.Buffer
 	limit    int
 	exceeded bool
 }
 
 func (b *limitedBuffer) Write(data []byte) (int, error) {
-	remaining := b.limit - b.Len()
+	remaining := b.limit - b.buffer.Len()
 	if remaining <= 0 {
 		b.exceeded = true
 		return len(data), nil
 	}
 	if len(data) > remaining {
 		b.exceeded = true
-		_, _ = b.Buffer.Write(data[:remaining])
+		_, _ = b.buffer.Write(data[:remaining])
 		return len(data), nil
 	}
-	return b.Buffer.Write(data)
+	return b.buffer.Write(data)
 }
+
+func (b *limitedBuffer) Bytes() []byte  { return b.buffer.Bytes() }
+func (b *limitedBuffer) String() string { return b.buffer.String() }
+func (b *limitedBuffer) Len() int       { return b.buffer.Len() }

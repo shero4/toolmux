@@ -134,6 +134,8 @@ type gwsRequest struct {
 	Body         json.RawMessage `json:"body"`
 	PageAll      bool            `json:"page_all"`
 	PageLimit    int             `json:"page_limit"`
+	DownloadTo   string          `json:"download_to"`
+	UploadFile   string          `json:"upload_file"`
 }
 
 func runGWS(executable, configDir string) error {
@@ -149,6 +151,9 @@ func runGWS(executable, configDir string) error {
 		}
 	}
 	if request.SubResource != "" && !gwsPart.MatchString(request.SubResource) {
+		if strings.Contains(request.SubResource, "/") || strings.Contains(request.SubResource, ".") {
+			return fmt.Errorf("sub_resource %q is a nested path; pass it as sub_resources, e.g. [\"settings\",\"sendAs\"]", request.SubResource)
+		}
 		return errors.New("sub_resource must be a simple API name")
 	}
 	for _, value := range request.SubResources {
@@ -187,6 +192,28 @@ func runGWS(executable, configDir string) error {
 		}
 		arguments = append(arguments, "--page-limit", fmt.Sprint(request.PageLimit))
 	}
+	var downloadPath string
+	if request.DownloadTo != "" {
+		path, err := exchangePath(request.DownloadTo)
+		if err != nil {
+			return err
+		}
+		downloadPath = path
+		if request.Service == "gmail" {
+			return runGWSGmailAttachmentDownload(executable, configDir, arguments, downloadPath)
+		}
+		arguments = append(arguments, "--output", downloadPath)
+	}
+	if request.UploadFile != "" {
+		path, err := exchangePath(request.UploadFile)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("upload_file: %w (put the file in %s first)", err, exchangeDir())
+		}
+		arguments = append(arguments, "--upload", path)
+	}
 	command := exec.Command(executable, arguments...)
 	command.Env = os.Environ()
 	if configDir != "" {
@@ -206,6 +233,11 @@ func runGWS(executable, configDir string) error {
 			return err
 		}
 		return fmt.Errorf("%w: %s", err, detail)
+	}
+	if downloadPath != "" {
+		// The CLI writes with this process's umask (0077 under the service);
+		// the agents run as another user and read through the group.
+		_ = os.Chmod(downloadPath, 0o644)
 	}
 	return nil
 }

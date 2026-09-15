@@ -2,7 +2,9 @@ package execute
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/shero4/toolmux/internal/store"
@@ -45,6 +47,16 @@ func TestRenderJSONPreservesExactValueType(t *testing.T) {
 	data, _ := json.Marshal(got)
 	if string(data) != `{"amount":42,"label":"invoice-7"}` {
 		t.Fatalf("got %s", data)
+	}
+}
+
+func TestLimitedBufferCapsThroughIOCopy(t *testing.T) {
+	buffer := &limitedBuffer{limit: 8}
+	if _, err := io.Copy(buffer, strings.NewReader("0123456789abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	if !buffer.exceeded || buffer.Len() != 8 {
+		t.Fatalf("io.Copy bypassed the cap: exceeded=%v len=%d", buffer.exceeded, buffer.Len())
 	}
 }
 
