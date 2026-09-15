@@ -170,6 +170,12 @@ func runGWS(executable, configDir string) error {
 	if value, err := compactJSON(request.Body); err != nil {
 		return fmt.Errorf("body: %w", err)
 	} else if value != "" {
+		if gwsNeedsDirectUpload(request, value) {
+			return runGWSGmailUpload(executable, configDir, request)
+		}
+		if len(value) > gwsArgvLimit {
+			return fmt.Errorf("body is %d bytes; the Google Workspace CLI takes it as one argument and Linux caps that at 128 KiB", len(value))
+		}
 		arguments = append(arguments, "--json", value)
 	}
 	if request.PageAll {
