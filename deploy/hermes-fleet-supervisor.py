@@ -62,7 +62,23 @@ def restart(profile, reason):
     if history and now - history[-1] < RESTART_COOLDOWN_SECONDS:
         logging.warning("profile=%s restart cooldown reason=%s", profile, reason)
         return
-    result = run("systemctl", "restart", f"hermes-gateway@{profile}.service")
+    # systemd is already reviving it (a graceful SIGUSR1 exit, or a crash
+    # within RestartSec); racing it with a second restart kills the new turn.
+    unit = f"hermes-gateway@{profile}.service"
+    shown = dict(line.split("=", 1) for line in run("systemctl", "show", "-p", "ActiveState,SubState,ExecMainExitTimestampMonotonic", unit).stdout.splitlines() if "=" in line)
+    state, sub = shown.get("ActiveState", ""), shown.get("SubState", "")
+    try:
+        uptime_us = float(open("/proc/uptime").read().split()[0]) * 1_000_000
+        exited_ago = (uptime_us - float(shown.get("ExecMainExitTimestampMonotonic", "0"))) / 1_000_000
+    except (OSError, ValueError):
+        exited_ago = 1e9
+    if state in {"activating", "reloading"} or sub in {"auto-restart", "start", "start-pre"} or exited_ago < 15:
+        logging.info("profile=%s restart skipped state=%s/%s exited_ago=%.0fs reason=%s", profile, state, sub, exited_ago, reason)
+        return
+    # Drain-aware first: the gateway finishes in-flight turns before exiting.
+    result = run("/usr/local/sbin/hermes-gateway-restart", profile, "180")
+    if result.returncode != 0:
+        result = run("systemctl", "restart", f"hermes-gateway@{profile}.service")
     if result.returncode == 0:
         history.append(now)
         startup_grace_until[profile] = now + STARTUP_GRACE_SECONDS

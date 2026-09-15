@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Drain-aware restart of one Hermes gateway: SIGUSR1 makes the gateway refuse
+# new turns, finish in-flight work, then exit so systemd revives it. Falls
+# back to systemctl restart only if the gateway does not exit in time.
+# Installed at /usr/local/sbin/hermes-gateway-restart on the host.
+set -euo pipefail
+p=${1:?profile}; wait=${2:-300}
+unit=hermes-gateway@$p.service
+pid=$(systemctl show -p MainPID --value "$unit")
+if [ "${pid:-0}" -gt 0 ]; then
+  kill -USR1 "$pid"
+  for i in $(seq 1 "$wait"); do
+    sleep 1
+    new=$(systemctl show -p MainPID --value "$unit")
+    if [ "$new" != "$pid" ] && [ "${new:-0}" -gt 0 ]; then echo "$p restarted gracefully after ${i}s (pid $pid -> $new)"; exit 0; fi
+  done
+  echo "$p did not exit within ${wait}s; forcing" >&2
+fi
+systemctl restart "$unit"; echo "$p force-restarted"
