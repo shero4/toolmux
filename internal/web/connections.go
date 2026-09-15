@@ -248,7 +248,9 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "/connections/"+id, errorFlash("Authorization could not be started: "+err.Error()))
 		return
 	}
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	// Finish the form submission before navigating to the external provider.
+	// Browsers can apply form-action to every redirect in a POST redirect chain.
+	s.render(w, r, http.StatusOK, "oauth_authorize", "connections", "Authorize connection", target)
 }
 
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {

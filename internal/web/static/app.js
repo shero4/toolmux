@@ -4,6 +4,14 @@
 (function () {
   "use strict";
 
+  /* OAuth starts with a same-origin POST. Navigate from the completed page so
+     form-action does not block an external provider (or its login redirects). */
+  var oauthContinue = document.querySelector("a[data-oauth-continue]");
+  if (oauthContinue && /^https?:$/.test(oauthContinue.protocol)) {
+    window.location.replace(oauthContinue.href);
+    return;
+  }
+
   /* Conditional fields: <select data-controls="x"> shows each element with
      data-when="x:a,b" only while the selected value is one of a or b. */
   document.querySelectorAll("[data-controls]").forEach(function (select) {
