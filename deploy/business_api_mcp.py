@@ -80,6 +80,14 @@ def exchange_path(name: Any) -> Path:
         raise ValueError("download_to/upload_file must be a file name relative to the exchange directory")
     full = EXCHANGE_DIR / cleaned
     full.parent.mkdir(parents=True, exist_ok=True)
+    # The service umask is 0077; folders must stay enterable for the agents.
+    folder = full.parent
+    while folder != EXCHANGE_DIR and EXCHANGE_DIR in folder.parents:
+        try:
+            folder.chmod(0o2775)
+        except OSError:
+            pass
+        folder = folder.parent
     return full
 
 

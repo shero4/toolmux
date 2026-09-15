@@ -35,6 +35,11 @@ func exchangePath(name string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o775); err != nil {
 		return "", fmt.Errorf("exchange directory: %w", err)
 	}
+	// MkdirAll honours the service umask (0077), which would leave folders
+	// the agents cannot enter; open every folder below the exchange root.
+	for dir := filepath.Dir(full); strings.HasPrefix(dir, exchangeDir()) && dir != exchangeDir(); dir = filepath.Dir(dir) {
+		_ = os.Chmod(dir, 0o2775)
+	}
 	return full, nil
 }
 
