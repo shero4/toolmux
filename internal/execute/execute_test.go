@@ -67,3 +67,16 @@ func TestLimitedBufferCapsMemory(t *testing.T) {
 		t.Fatalf("unexpected buffer state: n=%d err=%v value=%q exceeded=%v", n, err, buffer.String(), buffer.exceeded)
 	}
 }
+
+func TestUsableWorkingDirectory(t *testing.T) {
+	if got := usableWorkingDirectory(""); got != "" {
+		t.Fatalf("empty dir: got %q", got)
+	}
+	dir := t.TempDir()
+	if got := usableWorkingDirectory(dir); got != dir {
+		t.Fatalf("existing dir: got %q want %q", got, dir)
+	}
+	if got := usableWorkingDirectory(dir + "/missing"); got != "" {
+		t.Fatalf("missing dir: got %q", got)
+	}
+}

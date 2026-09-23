@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -211,7 +212,7 @@ func (r *Router) callCommand(ctx context.Context, tool store.Tool, credential st
 	defer cancel()
 	cmd := exec.CommandContext(callCtx, spec.Executable, rendered...)
 	cmd.WaitDelay = 2 * time.Second
-	cmd.Dir = spec.WorkingDirectory
+	cmd.Dir = usableWorkingDirectory(spec.WorkingDirectory)
 	cmd.Env = os.Environ()
 	if spec.CredentialEnv != "" && credential.Bearer() != "" {
 		cmd.Env = setEnv(cmd.Env, spec.CredentialEnv, credential.Bearer())
@@ -429,3 +430,18 @@ func (b *limitedBuffer) Write(data []byte) (int, error) {
 func (b *limitedBuffer) Bytes() []byte  { return b.buffer.Bytes() }
 func (b *limitedBuffer) String() string { return b.buffer.String() }
 func (b *limitedBuffer) Len() int       { return b.buffer.Len() }
+
+// usableWorkingDirectory returns dir when this process can enter it, else "".
+// The exchange directory is only needed for calls that move files; a plain
+// API read must not fail because a host permission change (for example a
+// Hermes update chmod-ing its root to 0700) made the directory unreachable.
+func usableWorkingDirectory(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		slog.Warn("command tool working directory unusable; running without it", "dir", dir, "err", err)
+		return ""
+	}
+	return dir
+}
