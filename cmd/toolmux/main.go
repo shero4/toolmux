@@ -145,6 +145,9 @@ func runGWS(executable, configDir string) error {
 	if err := decoder.Decode(&request); err != nil {
 		return fmt.Errorf("decode Google Workspace request: %w", err)
 	}
+	if err := normalizeGWSRequest(&request); err != nil {
+		return err
+	}
 	for label, value := range map[string]string{"service": request.Service, "resource": request.Resource, "method": request.Method} {
 		if !gwsPart.MatchString(value) {
 			return fmt.Errorf("%s must be a simple API name", label)
