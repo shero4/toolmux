@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -95,6 +96,7 @@ func definitions() []map[string]any {
 		tool("agent_create", "Create agent", "Create an agent identity and return its first token once.", `{"type":"object","properties":{"name":{"type":"string"},"slug":{"type":"string"}},"required":["name"],"additionalProperties":false}`),
 		tool("agent_issue_token", "Issue agent token", "Issue another runtime token for an existing agent.", `{"type":"object","properties":{"agent_id":{"type":"string"},"label":{"type":"string"}},"required":["agent_id"],"additionalProperties":false}`),
 		tool("agent_assign_connection", "Assign connection", "Grant or remove every capability on a connection and keep future capabilities in sync.", `{"type":"object","properties":{"agent_id":{"type":"string"},"connection_id":{"type":"string"},"enabled":{"type":"boolean"}},"required":["agent_id","connection_id","enabled"],"additionalProperties":false}`),
+		tool("connection_set_bearer", "Set bearer credential", "Replace the bearer or header secret of a bearer/header connection, then re-check it.", `{"type":"object","properties":{"connection_id":{"type":"string"},"secret":{"type":"string"}},"required":["connection_id","secret"],"additionalProperties":false}`),
 		tool("hermes_import", "Import Hermes", "Import detected Hermes profiles, connections, credentials, and Toolmux runtime configuration.", `{"type":"object","additionalProperties":false}`),
 	}
 }
@@ -117,6 +119,7 @@ func (h *Handler) call(w http.ResponseWriter, ctx context.Context, message reque
 		AgentID      string `json:"agent_id"`
 		ConnectionID string `json:"connection_id"`
 		Label        string `json:"label"`
+		Secret       string `json:"secret"`
 		Enabled      *bool  `json:"enabled"`
 	}
 	if len(params.Arguments) > 0 && json.Unmarshal(params.Arguments, &args) != nil {
@@ -164,6 +167,26 @@ func (h *Handler) call(w http.ResponseWriter, ctx context.Context, message reque
 		}
 		err = h.store.SetAgentConnection(ctx, args.AgentID, args.ConnectionID, *args.Enabled)
 		value = map[string]any{"updated": err == nil}
+	case "connection_set_bearer":
+		secret := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args.Secret), "Bearer "))
+		if args.ConnectionID == "" || secret == "" {
+			err = errors.New("connection_id and secret are required")
+			break
+		}
+		var connection store.Connection
+		connection, _, err = h.store.GetConnection(ctx, args.ConnectionID)
+		if err != nil {
+			break
+		}
+		if connection.AuthMethod != "bearer" && connection.AuthMethod != "header" {
+			err = fmt.Errorf("connection uses %q auth; only bearer or header secrets can be set here", connection.AuthMethod)
+			break
+		}
+		if err = h.store.SaveCredential(ctx, args.ConnectionID, store.Credential{BearerToken: secret}); err != nil {
+			break
+		}
+		checkErr := h.checker.Check(ctx, args.ConnectionID)
+		value = map[string]any{"updated": true, "checked": checkErr == nil}
 	case "hermes_import":
 		var summary importer.Summary
 		summary, err = h.importer.ImportAll(ctx, h.importer.Scan(ctx))
