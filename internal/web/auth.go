@@ -40,7 +40,7 @@ func permitted(u store.User, r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
-	if strings.HasSuffix(r.URL.Path, "/new") || r.URL.Path == "/agents/discover" || r.URL.Path == "/oauth/callback" {
+	if strings.HasSuffix(r.URL.Path, "/new") || strings.HasSuffix(r.URL.Path, "/edit") || r.URL.Path == "/agents/discover" || r.URL.Path == "/oauth/callback" {
 		return false
 	}
 	return u.Role == "viewer"

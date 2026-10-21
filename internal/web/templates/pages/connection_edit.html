@@ -1,0 +1,62 @@
+{{define "content"}}{{$f := .Data}}{{$c := $f.Connection}}
+<header class="page-header">
+  <div>
+    <p class="crumbs"><a href="/connections">Connections</a> / <a href="/connections/{{$c.ID}}">{{$c.Slug}}</a> / Edit</p>
+    <h1>Edit connection</h1>
+    <p class="lede">{{kind $c.Kind}} · {{auth $c.AuthMethod}}. The type and authorization method are fixed; replace the credential on the connection page.</p>
+  </div>
+</header>
+
+<form class="form panel narrow" method="post" action="/connections/{{$c.ID}}" autocomplete="off">
+  {{if $f.Error}}<div class="alert alert-error"><p>{{$f.Error}}</p></div>{{end}}
+  {{if $c.SourceKey}}<div class="alert alert-info"><p>This connection was imported. The next import restores the source's name and endpoint.</p></div>{{end}}
+  <fieldset class="panel-body">
+    <legend>Identity</legend>
+    <div class="field-row">
+      <div class="field">
+        <label for="connector_name">Connector</label>
+        <input id="connector_name" name="connector_name" value="{{$f.ConnectorName}}" required placeholder="Stripe">
+        <p class="hint">The service or product.</p>
+      </div>
+      <div class="field">
+        <label for="name">Connection name</label>
+        <input id="name" name="name" value="{{$f.Name}}" required placeholder="Finance workspace">
+        <p class="hint">The account or environment on it.</p>
+      </div>
+    </div>
+    <div class="field">
+      <label for="connection_slug">Connection slug</label>
+      <input id="connection_slug" name="connection_slug" value="{{$f.Slug}}" pattern="[a-z0-9][a-z0-9-]*" placeholder="finance-workspace">
+      <p class="hint">Prefixes exposed tool names as <span class="mono">slug__tool</span>. Changing it renames every tool of this connection; grants are kept, but agents must use the new names.</p>
+    </div>
+    {{if eq $c.Kind "mcp_http" "http_api"}}
+    <div class="field">
+      <label for="endpoint_url">Endpoint URL</label>
+      <input id="endpoint_url" name="endpoint_url" type="url" value="{{$f.EndpointURL}}" required placeholder="https://api.example.com">
+    </div>
+    {{end}}
+    {{if eq $c.Kind "http_api"}}
+    <div class="field">
+      <label for="health_path">Health path <span class="hint">optional</span></label>
+      <input id="health_path" name="health_path" value="{{$f.HealthPath}}" placeholder="/health">
+    </div>
+    {{end}}
+    {{if $f.SharedWith}}<p class="hint">The connector name{{if eq $c.Kind "mcp_http" "http_api"}} and endpoint{{end}} are shared with {{$f.SharedWith}} other connection{{if ne $f.SharedWith 1}}s{{end}} on <span class="mono">{{$c.ConnectorSlug}}</span>; changes apply to all of them.</p>{{end}}
+  </fieldset>
+
+  {{if eq $c.AuthMethod "header"}}
+  <fieldset class="panel-body">
+    <legend>Authorization</legend>
+    <div class="field">
+      <label for="auth_name">Header name</label>
+      <input id="auth_name" name="auth_name" value="{{$f.AuthName}}" required placeholder="X-API-Key">
+    </div>
+  </fieldset>
+  {{end}}
+
+  <div class="panel-foot form-actions">
+    <button class="btn btn-primary" type="submit">Save</button>
+    <a class="btn btn-ghost" href="/connections/{{$c.ID}}">Cancel</a>
+  </div>
+</form>
+{{end}}

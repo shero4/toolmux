@@ -97,13 +97,23 @@ func (s *Store) CreateConnection(ctx context.Context, kind, connectorName, conne
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	var connectorID string
-	err = tx.QueryRow(ctx, `
-		INSERT INTO connectors(name,slug,kind,endpoint_url,health_path) VALUES ($1,$2,$3,$4,$5)
-		ON CONFLICT (slug) DO UPDATE SET name=excluded.name, kind=excluded.kind, endpoint_url=excluded.endpoint_url, health_path=excluded.health_path
-		RETURNING id`, connectorName, connectorSlug, kind, nullable(endpointURL), healthPath).Scan(&connectorID)
-	if err != nil {
+	// A connector slug that already exists is reused only when it describes the
+	// same upstream. Rewriting it would silently repoint every connection that
+	// shares the connector.
+	var connectorID, existingKind, existingEndpoint, existingHealth string
+	err = tx.QueryRow(ctx, `SELECT id, kind, coalesce(endpoint_url,''), health_path FROM connectors WHERE slug=$1 FOR UPDATE`, connectorSlug).
+		Scan(&connectorID, &existingKind, &existingEndpoint, &existingHealth)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		err = tx.QueryRow(ctx, `INSERT INTO connectors(name,slug,kind,endpoint_url,health_path) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+			connectorName, connectorSlug, kind, nullable(endpointURL), healthPath).Scan(&connectorID)
+		if err != nil {
+			return "", err
+		}
+	case err != nil:
 		return "", err
+	case existingKind != kind || existingEndpoint != endpointURL || existingHealth != healthPath:
+		return "", ErrConnectorConflict
 	}
 	var connectionID string
 	err = tx.QueryRow(ctx, `INSERT INTO connections(connector_id,name,slug,auth_method,auth_name) VALUES ($1,$2,$3,$4,$5) RETURNING id`, connectorID, connectionName, connectionSlug, authMethod, nullable(authName)).Scan(&connectionID)
@@ -288,6 +298,77 @@ func (s *Store) SaveCredential(ctx context.Context, connectionID string, credent
 	}
 	_, err = s.pool.Exec(ctx, `INSERT INTO connection_credentials(connection_id,ciphertext,nonce) VALUES ($1,$2,$3) ON CONFLICT (connection_id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,key_version=1,updated_at=now()`, connectionID, ciphertext, nonce)
 	return err
+}
+
+// ConnectionEdit is the operator-editable part of a connection. The type,
+// authorization method, and credential keep their own flows.
+type ConnectionEdit struct {
+	ConnectorName, EndpointURL, HealthPath string
+	Name, Slug, AuthName                   string
+}
+
+// UpdateConnection renames a connection and edits its connector. Connector
+// fields are shared by every connection on that connector. A new slug renames
+// the connection's exposed tools in the same transaction, so grants follow
+// the tools; agents must call them by their new names.
+func (s *Store) UpdateConnection(ctx context.Context, id string, edit ConnectionEdit) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var connectorID, slug, authMethod string
+	err = tx.QueryRow(ctx, `SELECT connector_id, slug, auth_method FROM connections WHERE id=$1 FOR UPDATE`, id).Scan(&connectorID, &slug, &authMethod)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE connectors SET name=$2, endpoint_url=$3, health_path=$4 WHERE id=$1`,
+		connectorID, edit.ConnectorName, nullable(edit.EndpointURL), edit.HealthPath); err != nil {
+		return err
+	}
+	authName := ""
+	if authMethod == "header" {
+		authName = edit.AuthName
+	}
+	if _, err := tx.Exec(ctx, `UPDATE connections SET name=$2, slug=$3, auth_name=$4 WHERE id=$1`, id, edit.Name, edit.Slug, nullable(authName)); err != nil {
+		return err
+	}
+	if edit.Slug != slug {
+		rows, err := tx.Query(ctx, `SELECT id, upstream_name FROM tools WHERE connection_id=$1`, id)
+		if err != nil {
+			return err
+		}
+		renames := map[string]string{}
+		for rows.Next() {
+			var toolID, upstream string
+			if err := rows.Scan(&toolID, &upstream); err != nil {
+				rows.Close()
+				return err
+			}
+			renames[toolID] = exposedToolName(edit.Slug, upstream)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for toolID, exposed := range renames {
+			if _, err := tx.Exec(ctx, `UPDATE tools SET exposed_name=$2 WHERE id=$1`, toolID, exposed); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// ConnectorConnectionCount reports how many connections share a connection's
+// connector, including the connection itself.
+func (s *Store) ConnectorConnectionCount(ctx context.Context, connectionID string) (int, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM connections WHERE connector_id=(SELECT connector_id FROM connections WHERE id=$1)`, connectionID).Scan(&count)
+	return count, err
 }
 
 // DeleteConnection removes a connection, its tools, grants, credentials, and

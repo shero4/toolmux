@@ -185,6 +185,8 @@ func (s *Server) Handler(mcpHandler, adminHandler http.Handler, inference ...htt
 	mux.HandleFunc("GET /connections/new", s.newConnection)
 	mux.HandleFunc("POST /connections", s.createConnection)
 	mux.HandleFunc("GET /connections/{id}", s.connection)
+	mux.HandleFunc("POST /connections/{id}", s.updateConnection)
+	mux.HandleFunc("GET /connections/{id}/edit", s.editConnection)
 	mux.HandleFunc("POST /connections/{id}/check", s.checkConnection)
 	mux.HandleFunc("POST /connections/{id}/credential", s.updateConnectionCredential)
 	mux.HandleFunc("POST /connections/{id}/authorize", s.authorizeConnection)

@@ -8,6 +8,7 @@
   <div class="page-actions">
     {{if and $d.OAuth (ne $c.Status "disabled")}}{{if $.CanManage}}<form method="post" action="/connections/{{$c.ID}}/authorize"><button class="btn {{if eq $c.Status "reauthorization_required"}}btn-primary{{end}}" type="submit">{{if $d.OAuth.HasAccess}}Reauthorize{{else}}Authorize{{end}}</button></form>{{end}}{{end}}
     {{if ne $c.Status "disabled"}}{{if $.CanManage}}<form method="post" action="/connections/{{$c.ID}}/check"><button class="btn" type="submit">Check now</button></form>{{end}}{{end}}
+    {{if $.CanManage}}<a class="btn" href="/connections/{{$c.ID}}/edit">Edit</a>{{end}}
     {{if $d.Declarative}}{{if $.CanManage}}<a class="btn btn-primary" href="/tools/new?connection={{$c.ID}}">Define tool</a>{{end}}{{end}}
   </div>
 </header>
