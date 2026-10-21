@@ -29,6 +29,29 @@ type connectionForm struct {
 	Error                                    string
 }
 
+// connectionEditForm carries the edit form. Connection supplies the fields
+// that are shown but not editable here.
+type connectionEditForm struct {
+	Connection                        store.Connection
+	ConnectorName, Name, Slug         string
+	EndpointURL, HealthPath, AuthName string
+	SharedWith                        int
+	Error                             string
+}
+
+// namesLookLikeURLs catches an endpoint pasted into a name field, which would
+// otherwise label the connection and prefix its tools with the URL.
+func namesLookLikeURLs(names ...string) bool {
+	for _, name := range names {
+		if strings.Contains(name, "://") {
+			return true
+		}
+	}
+	return false
+}
+
+const urlAsNameMessage = "Use readable names for the connector and connection. The endpoint URL goes in its own field."
+
 type connectionPage struct {
 	Connection    store.Connection
 	Stdio         *store.MCPStdioSpec
@@ -108,6 +131,8 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		reject(form, "Choose a connection type.")
 	case form.ConnectorName == "" || form.ConnectorSlug == "" || form.Name == "" || form.Slug == "":
 		reject(form, "Enter a connector name and a connection name.")
+	case namesLookLikeURLs(form.ConnectorName, form.Name):
+		reject(form, urlAsNameMessage)
 	case form.Kind != "command" && !validHTTPURL(form.EndpointURL):
 		reject(form, "Enter a valid http or https endpoint.")
 	case form.HealthPath != "" && !strings.HasPrefix(form.HealthPath, "/"):
@@ -128,6 +153,10 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 			oauthConfig = &store.OAuthConfig{AuthorizationURL: form.AuthorizationURL, TokenURL: form.TokenURL, ClientID: form.ClientID, Scopes: form.Scopes, TokenAuthMethod: form.TokenAuthMethod}
 		}
 		id, err := s.store.CreateConnection(r.Context(), form.Kind, form.ConnectorName, form.ConnectorSlug, form.EndpointURL, form.HealthPath, form.Name, form.Slug, form.AuthMethod, form.AuthName, secret, oauthConfig)
+		if errors.Is(err, store.ErrConnectorConflict) {
+			reject(form, "The connector slug "+form.ConnectorSlug+" already belongs to a different endpoint. Choose another connector slug.")
+			return
+		}
 		if err != nil {
 			s.log.Error("create connection", "error", err)
 			reject(form, "The connection could not be created. Its slug may already be in use.")
@@ -181,6 +210,101 @@ func (s *Server) connection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "connection", "connections", connection.Name, page)
+}
+
+func (s *Server) editConnection(w http.ResponseWriter, r *http.Request) {
+	connection, err := s.store.GetConnectionSummary(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		s.notFound(w, r, "Connection")
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	form := connectionEditForm{Connection: connection, ConnectorName: connection.ConnectorName, Name: connection.Name, Slug: connection.Slug,
+		EndpointURL: connection.EndpointURL, HealthPath: connection.HealthPath, AuthName: connection.AuthName}
+	if form.SharedWith, err = s.sharedWith(r, connection.ID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "connection_edit", "connections", "Edit "+connection.Name, form)
+}
+
+// sharedWith counts the other connections on the same connector.
+func (s *Server) sharedWith(r *http.Request, id string) (int, error) {
+	count, err := s.store.ConnectorConnectionCount(r.Context(), id)
+	return max(count-1, 0), err
+}
+
+func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
+	connection, err := s.store.GetConnectionSummary(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		s.notFound(w, r, "Connection")
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	reject := func(form connectionEditForm, message string) {
+		form.Error = message
+		form.SharedWith, _ = s.sharedWith(r, connection.ID)
+		s.render(w, r, http.StatusBadRequest, "connection_edit", "connections", "Edit "+connection.Name, form)
+	}
+	if err := r.ParseForm(); err != nil {
+		reject(connectionEditForm{Connection: connection}, "The form could not be read.")
+		return
+	}
+	value := func(name string) string { return strings.TrimSpace(r.FormValue(name)) }
+	form := connectionEditForm{Connection: connection, ConnectorName: value("connector_name"), Name: value("name"), Slug: store.Slug(value("connection_slug")),
+		EndpointURL: value("endpoint_url"), HealthPath: value("health_path"), AuthName: value("auth_name")}
+	// Fields that do not apply to this kind or authorization method keep
+	// their stored values.
+	hasEndpoint := connection.Kind == "mcp_http" || connection.Kind == "http_api"
+	if !hasEndpoint {
+		form.EndpointURL = connection.EndpointURL
+	}
+	if connection.Kind != "http_api" {
+		form.HealthPath = connection.HealthPath
+	}
+	if connection.AuthMethod != "header" {
+		form.AuthName = connection.AuthName
+	}
+	if form.Slug == "" {
+		form.Slug = store.Slug(form.Name)
+	}
+	switch {
+	case form.ConnectorName == "" || form.Name == "" || form.Slug == "":
+		reject(form, "Enter a connector name and a connection name.")
+	case namesLookLikeURLs(form.ConnectorName, form.Name):
+		reject(form, urlAsNameMessage)
+	case hasEndpoint && !validHTTPURL(form.EndpointURL):
+		reject(form, "Enter a valid http or https endpoint.")
+	case form.HealthPath != "" && !strings.HasPrefix(form.HealthPath, "/"):
+		reject(form, "The health path must start with /.")
+	case connection.AuthMethod == "header" && form.AuthName == "":
+		reject(form, "Enter the header name that carries the API key.")
+	default:
+		edit := store.ConnectionEdit{ConnectorName: form.ConnectorName, EndpointURL: form.EndpointURL, HealthPath: form.HealthPath,
+			Name: form.Name, Slug: form.Slug, AuthName: form.AuthName}
+		if err := s.store.UpdateConnection(r.Context(), connection.ID, edit); err != nil {
+			s.log.Error("update connection", "connection", connection.ID, "error", err)
+			reject(form, "The connection could not be saved. Its name or slug may already be in use.")
+			return
+		}
+		reachable := form.EndpointURL != connection.EndpointURL || form.HealthPath != connection.HealthPath || form.AuthName != connection.AuthName
+		if reachable && connection.Status != "disabled" {
+			s.runCheck(r, connection.ID)
+			s.redirect(w, r, "/connections/"+connection.ID, s.checkFlash(r, connection.ID))
+			return
+		}
+		message := "Connection saved."
+		if form.Slug != connection.Slug {
+			message = "Connection saved. Its tools are now exposed as " + form.Slug + "__<tool>."
+		}
+		s.redirect(w, r, "/connections/"+connection.ID, okFlash(message))
+	}
 }
 
 func (s *Server) runCheck(r *http.Request, id string) {

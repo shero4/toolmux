@@ -20,6 +20,10 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// ErrConnectorConflict reports a connector slug that already describes a
+// different upstream.
+var ErrConnectorConflict = errors.New("connector slug describes a different upstream")
+
 type Store struct {
 	pool *pgxpool.Pool
 	box  *secretbox.Box
